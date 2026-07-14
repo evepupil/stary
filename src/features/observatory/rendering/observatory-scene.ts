@@ -1,6 +1,7 @@
 import {
   AdditiveBlending,
   AmbientLight,
+  ArrowHelper,
   BufferAttribute,
   BufferGeometry,
   Color,
@@ -12,10 +13,12 @@ import {
   MeshBasicMaterial,
   MeshStandardMaterial,
   PerspectiveCamera,
+  Plane,
   PointLight,
   Points,
   PointsMaterial,
   RingGeometry,
+  Raycaster,
   Scene,
   SphereGeometry,
   Vector2,
@@ -26,6 +29,7 @@ import {
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
 import type { BodyState } from '../../../physics/protocol/schemas';
+import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import { getCelestialCatalogEntry } from '../catalog';
 import {
   computeFocusCameraFrame,
@@ -33,6 +37,12 @@ import {
   type ObservatoryCameraFrame,
   type ObservatoryViewMode,
 } from './camera-focus';
+import {
+  applyCreationCameraView,
+  captureCreationCameraState,
+  restoreCreationCameraState,
+  type StoredCreationCameraState,
+} from './creation-camera';
 import {
   computeMetersToSceneUnit,
   computePositionRingRadius,
@@ -49,6 +59,11 @@ import {
 import { sampleOsculatingOrbit } from './orbit';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
 import {
+  resolveBodyRenderingProfile,
+  type BodyRenderingKind,
+  type BodyRenderingProfile,
+} from './body-rendering';
+import {
   pickNearestScreenMarker,
   selectVisibleScreenMarkers,
   type ScreenMarkerCandidate,
@@ -60,6 +75,7 @@ const MARKER_MINIMUM_SEPARATION_PIXELS = 18;
 const MARKER_HIT_RADIUS_PIXELS = 20;
 const MARKER_DIAGNOSTICS_QUERY_PARAMETER = 'markerDiagnostics';
 const MARKER_DIAGNOSTICS_INTERVAL_MILLISECONDS = 100;
+const CREATION_VELOCITY_DRAG_SECONDS = 10_000_000;
 
 interface BodyVisual {
   readonly bodyId: string;
@@ -67,6 +83,7 @@ interface BodyVisual {
   readonly mesh: Mesh<SphereGeometry, MeshBasicMaterial | MeshStandardMaterial>;
   readonly ring: Mesh<RingGeometry, MeshBasicMaterial>;
   readonly light: PointLight | null;
+  readonly renderingKind: BodyRenderingKind;
   physicalRadiusSceneUnits: number;
 }
 
@@ -74,9 +91,16 @@ interface OrbitVisual {
   readonly line: Line<BufferGeometry, LineBasicMaterial>;
 }
 
+interface CreationBodyVisual {
+  readonly bodyId: string;
+  readonly mesh: Mesh<SphereGeometry, MeshBasicMaterial>;
+  physicalRadiusSceneUnits: number;
+}
+
 export interface ObservatorySceneOptions {
   readonly backend: RendererBackend;
   readonly mount: HTMLDivElement;
+  readonly onCreationPlacementChange: (placement: CreationPlacement) => void;
   readonly onError: (error: Error) => void;
   readonly onSelectBody: (bodyId: string) => void;
   readonly renderer: ObservatoryRenderer;
@@ -87,7 +111,23 @@ export class ObservatoryScene {
   private readonly bodyVisuals = new Map<string, BodyVisual>();
   private readonly camera = new PerspectiveCamera(OBSERVATORY_VERTICAL_FOV_DEGREES, 1, 0.01, 320);
   private readonly controls: OrbitControls | null = null;
+  private readonly creationBodyVisuals = new Map<string, CreationBodyVisual>();
+  private readonly creationPlane = new Plane(new Vector3(0, 0, 1), 0);
+  private readonly creationRaycaster = new Raycaster();
+  private readonly creationTrajectoryVisuals = new Map<
+    string,
+    Line<BufferGeometry, LineBasicMaterial>
+  >();
+  private readonly creationVelocityArrow = new ArrowHelper(
+    new Vector3(1, 0, 0),
+    new Vector3(),
+    1,
+    0xf0c674,
+    0.22,
+    0.1,
+  );
   private readonly mount: HTMLDivElement;
+  private readonly onCreationPlacementChange: (placement: CreationPlacement) => void;
   private readonly onError: (error: Error) => void;
   private readonly onSelectBody: (bodyId: string) => void;
   private readonly orbitVisuals = new Map<string, OrbitVisual>();
@@ -99,6 +139,11 @@ export class ObservatoryScene {
   private animationFrame: number | null = null;
   private bodySetKey = '';
   private cameraWasInteracted = false;
+  private creationCameraSnapshot: StoredCreationCameraState | null = null;
+  private creationCameraWasInteracted = false;
+  private creationDragStartScene: Vector3 | null = null;
+  private creationPointerId: number | null = null;
+  private creationState: CreationOverlayState | null = null;
   private disposed = false;
   private focusBodyId: string | null = null;
   private lastDiagnosticsUpdateTimeMilliseconds = Number.NEGATIVE_INFINITY;
@@ -113,6 +158,7 @@ export class ObservatoryScene {
   constructor(options: ObservatorySceneOptions) {
     this.backend = options.backend;
     this.mount = options.mount;
+    this.onCreationPlacementChange = options.onCreationPlacementChange;
     this.onError = options.onError;
     this.onSelectBody = options.onSelectBody;
     this.renderer = options.renderer;
@@ -142,8 +188,12 @@ export class ObservatoryScene {
       this.scene.background = new Color(0x030506);
       this.scene.add(new AmbientLight(0x7f96a3, 0.18));
       this.scene.add(createStarField());
+      this.creationVelocityArrow.visible = false;
+      this.creationVelocityArrow.renderOrder = 6;
+      this.scene.add(this.creationVelocityArrow);
 
       canvas.addEventListener('pointerdown', this.handlePointerDown);
+      canvas.addEventListener('pointermove', this.handlePointerMove);
       canvas.addEventListener('pointerup', this.handlePointerUp);
       canvas.addEventListener('pointercancel', this.handlePointerCancel);
 
@@ -185,22 +235,27 @@ export class ObservatoryScene {
 
     for (const body of bodies) {
       const isPrimary = primary?.id === body.id;
+      const rendering = resolveBodyRenderingProfile(body.id);
       let visual = this.bodyVisuals.get(body.id);
-      if (visual !== undefined && visual.isPrimary !== isPrimary) {
+      if (
+        visual !== undefined &&
+        (visual.isPrimary !== isPrimary || visual.renderingKind !== rendering.kind)
+      ) {
         this.removeBodyVisual(visual);
         this.bodyVisuals.delete(body.id);
         visual = undefined;
       }
       if (visual === undefined) {
-        visual = this.createBodyVisual(body, isPrimary);
+        visual = this.createBodyVisual(body, isPrimary, rendering);
         this.bodyVisuals.set(body.id, visual);
       }
       this.updateBodyVisual(visual, body);
     }
 
     this.updateOrbits(bodies);
+    this.updateCreationOverlay();
 
-    if (this.viewMode === 'focus') {
+    if (this.creationState?.enabled !== true && this.viewMode === 'focus') {
       this.followFocusedBody();
     }
   }
@@ -215,6 +270,9 @@ export class ObservatoryScene {
     const frame = computeFocusCameraFrame(body, parent, this.metersToSceneUnit, this.camera.aspect);
     this.focusBodyId = bodyId;
     this.viewMode = 'focus';
+    if (this.creationState?.enabled === true) {
+      return true;
+    }
     this.cameraWasInteracted = false;
     this.applyCameraFrame(frame);
     return true;
@@ -223,8 +281,41 @@ export class ObservatoryScene {
   showOverview(): void {
     this.focusBodyId = null;
     this.viewMode = 'overview';
+    if (this.creationState?.enabled === true) {
+      return;
+    }
     this.cameraWasInteracted = false;
     this.applyCameraFrame(computeOverviewCameraFrame(this.camera.aspect));
+  }
+
+  setCreationState(state: CreationOverlayState | null): void {
+    if (this.disposed) {
+      return;
+    }
+    const wasEnabled = this.creationState?.enabled === true;
+    const nextEnabled = state?.enabled === true;
+    if (!wasEnabled && nextEnabled) {
+      this.enterCreationCameraView();
+    } else if (wasEnabled && !nextEnabled) {
+      this.cancelCreationDrag();
+      this.leaveCreationCameraView();
+    }
+    this.creationState = state;
+    if (this.controls !== null) {
+      this.controls.enabled = !nextEnabled;
+    }
+    const canvas = this.renderer.domElement;
+    canvas.dataset.creationActive = state?.enabled === true ? 'true' : 'false';
+    if (state?.enabled === true) {
+      canvas.dataset.creationStage = state.placement?.phase ?? 'placing';
+      canvas.dataset.creationPreviewRisk = state.preview?.risk.kind ?? 'none';
+      canvas.dataset.creationPreviewTrackCount = String(state.preview?.tracks.length ?? 0);
+    } else {
+      delete canvas.dataset.creationStage;
+      delete canvas.dataset.creationPreviewRisk;
+      delete canvas.dataset.creationPreviewTrackCount;
+    }
+    this.updateCreationOverlay();
   }
 
   dispose(): void {
@@ -243,6 +334,7 @@ export class ObservatoryScene {
 
     const canvas = this.renderer.domElement;
     canvas.removeEventListener('pointerdown', this.handlePointerDown);
+    canvas.removeEventListener('pointermove', this.handlePointerMove);
     canvas.removeEventListener('pointerup', this.handlePointerUp);
     canvas.removeEventListener('pointercancel', this.handlePointerCancel);
 
@@ -252,17 +344,24 @@ export class ObservatoryScene {
     disposeObservatoryRenderer(this.renderer);
     this.bodyVisuals.clear();
     this.orbitVisuals.clear();
+    this.creationBodyVisuals.clear();
+    this.creationTrajectoryVisuals.clear();
+    this.creationCameraSnapshot = null;
   }
 
-  private readonly createBodyVisual = (body: BodyState, isPrimary: boolean): BodyVisual => {
+  private readonly createBodyVisual = (
+    body: BodyState,
+    isPrimary: boolean,
+    rendering: BodyRenderingProfile,
+  ): BodyVisual => {
     const geometry = new SphereGeometry(1, 48, 32);
-    const color = getCelestialCatalogEntry(body.id)?.color ?? 0x8ba4b3;
-    const material = isPrimary
-      ? new MeshBasicMaterial({ color })
-      : new MeshStandardMaterial({
-          color,
-          roughness: 0.9,
-        });
+    const material =
+      rendering.kind === 'star'
+        ? new MeshBasicMaterial({ color: rendering.color })
+        : new MeshStandardMaterial({
+            color: rendering.color,
+            roughness: 0.9,
+          });
     const mesh = new Mesh(geometry, material);
     mesh.userData.bodyId = body.id;
     mesh.renderOrder = 2;
@@ -282,7 +381,7 @@ export class ObservatoryScene {
     ring.renderOrder = 3;
     this.scene.add(ring);
 
-    const light = isPrimary ? new PointLight(0xfff0c7, 3.2, 0, 1.8) : null;
+    const light = rendering.emitsLight ? new PointLight(0xfff0c7, 3.2, 0, 1.8) : null;
     if (light !== null) {
       this.scene.add(light);
     }
@@ -293,6 +392,7 @@ export class ObservatoryScene {
       light,
       mesh,
       physicalRadiusSceneUnits: 0,
+      renderingKind: rendering.kind,
       ring,
     };
   };
@@ -389,7 +489,9 @@ export class ObservatoryScene {
     const width = Math.max(1, this.mount.clientWidth);
     const height = Math.max(1, this.mount.clientHeight);
     this.camera.aspect = width / height;
-    if (!this.cameraWasInteracted) {
+    if (this.creationState?.enabled === true && this.controls !== null) {
+      applyCreationCameraView(this.camera, this.controls);
+    } else if (!this.cameraWasInteracted) {
       const focusFrame = this.computeCurrentFocusFrame();
       this.applyCameraFrame(
         this.viewMode === 'focus' && focusFrame !== null
@@ -408,7 +510,9 @@ export class ObservatoryScene {
     }
 
     try {
-      this.controls?.update();
+      if (this.creationState?.enabled !== true) {
+        this.controls?.update();
+      }
       for (const visual of this.bodyVisuals.values()) {
         visual.ring.quaternion.copy(this.camera.quaternion);
         const minimumWorldRadius = computeMinimumBillboardWorldRadius(
@@ -420,6 +524,14 @@ export class ObservatoryScene {
           computePositionRingRadius(visual.physicalRadiusSceneUnits, minimumWorldRadius),
         );
       }
+      for (const visual of this.creationBodyVisuals.values()) {
+        const minimumWorldRadius = computeMinimumBillboardWorldRadius(
+          this.camera.position.distanceTo(visual.mesh.position),
+          Math.max(1, this.mount.clientHeight),
+          7,
+        );
+        visual.mesh.scale.setScalar(Math.max(visual.physicalRadiusSceneUnits, minimumWorldRadius));
+      }
       this.updateVisibleScreenMarkers(timestampMilliseconds);
       renderObservatoryFrame(this.renderer, this.scene, this.camera);
       this.animationFrame = requestAnimationFrame(this.renderFrame);
@@ -430,12 +542,49 @@ export class ObservatoryScene {
   };
 
   private readonly handlePointerDown = (event: PointerEvent): void => {
-    if (event.button === 0) {
+    if (event.button !== 0) {
+      return;
+    }
+    if (this.creationState?.enabled === true && this.creationState.interactive) {
+      const scenePosition = this.projectPointerToCreationPlane(event);
+      if (scenePosition === null) {
+        return;
+      }
+      event.preventDefault();
+      this.creationDragStartScene = scenePosition;
+      this.creationPointerId = event.pointerId;
+      this.renderer.domElement.setPointerCapture(event.pointerId);
+      this.emitCreationPlacement(scenePosition, scenePosition, 'dragging');
+    } else {
       this.pointerDownPosition = new Vector2(event.clientX, event.clientY);
     }
   };
 
+  private readonly handlePointerMove = (event: PointerEvent): void => {
+    if (
+      this.creationPointerId !== event.pointerId ||
+      this.creationDragStartScene === null ||
+      this.creationState?.enabled !== true ||
+      !this.creationState.interactive
+    ) {
+      return;
+    }
+    const scenePosition = this.projectPointerToCreationPlane(event);
+    if (scenePosition !== null) {
+      event.preventDefault();
+      this.emitCreationPlacement(this.creationDragStartScene, scenePosition, 'dragging');
+    }
+  };
+
   private readonly handlePointerUp = (event: PointerEvent): void => {
+    if (this.creationPointerId === event.pointerId && this.creationDragStartScene !== null) {
+      const scenePosition =
+        this.projectPointerToCreationPlane(event) ?? this.creationDragStartScene;
+      event.preventDefault();
+      this.emitCreationPlacement(this.creationDragStartScene, scenePosition, 'placed');
+      this.releaseCreationPointer(event.pointerId);
+      return;
+    }
     const pointerDownPosition = this.pointerDownPosition;
     this.pointerDownPosition = null;
     if (
@@ -465,6 +614,7 @@ export class ObservatoryScene {
 
   private readonly handlePointerCancel = (): void => {
     this.pointerDownPosition = null;
+    this.cancelCreationDrag();
   };
 
   private readonly handleControlsChange = (): void => {
@@ -472,6 +622,278 @@ export class ObservatoryScene {
       this.cameraWasInteracted = true;
     }
   };
+
+  private enterCreationCameraView(): void {
+    const controls = this.controls;
+    if (controls === null) {
+      return;
+    }
+
+    this.updatingControlsProgrammatically = true;
+    const dampingEnabled = controls.enableDamping;
+    try {
+      // Flush a pending damping delta before capturing the user's exact composition.
+      controls.enableDamping = false;
+      controls.update();
+      this.creationCameraSnapshot = captureCreationCameraState(this.camera, controls);
+      this.creationCameraWasInteracted = this.cameraWasInteracted;
+      applyCreationCameraView(this.camera, controls);
+    } finally {
+      controls.enableDamping = dampingEnabled;
+      this.updatingControlsProgrammatically = false;
+    }
+  }
+
+  private leaveCreationCameraView(): void {
+    const controls = this.controls;
+    const snapshot = this.creationCameraSnapshot;
+    if (controls === null || snapshot === null) {
+      return;
+    }
+
+    this.updatingControlsProgrammatically = true;
+    try {
+      restoreCreationCameraState(this.camera, controls, snapshot);
+      this.cameraWasInteracted = this.creationCameraWasInteracted;
+      this.creationCameraSnapshot = null;
+    } finally {
+      this.updatingControlsProgrammatically = false;
+    }
+  }
+
+  private projectPointerToCreationPlane(event: PointerEvent): Vector3 | null {
+    const bounds = this.renderer.domElement.getBoundingClientRect();
+    if (bounds.width <= 0 || bounds.height <= 0) {
+      return null;
+    }
+    const pointer = new Vector2(
+      ((event.clientX - bounds.left) / bounds.width) * 2 - 1,
+      1 - ((event.clientY - bounds.top) / bounds.height) * 2,
+    );
+    this.creationRaycaster.setFromCamera(pointer, this.camera);
+    return this.creationRaycaster.ray.intersectPlane(this.creationPlane, new Vector3());
+  }
+
+  private emitCreationPlacement(
+    startScenePosition: Vector3,
+    endScenePosition: Vector3,
+    phase: CreationPlacement['phase'],
+  ): void {
+    const inverseScale = 1 / this.metersToSceneUnit;
+    this.onCreationPlacementChange({
+      phase,
+      positionMeters: {
+        x: startScenePosition.x * inverseScale,
+        y: startScenePosition.y * inverseScale,
+        z: startScenePosition.z * inverseScale,
+      },
+      velocityMetersPerSecond: {
+        x:
+          ((endScenePosition.x - startScenePosition.x) * inverseScale) /
+          CREATION_VELOCITY_DRAG_SECONDS,
+        y:
+          ((endScenePosition.y - startScenePosition.y) * inverseScale) /
+          CREATION_VELOCITY_DRAG_SECONDS,
+        z:
+          ((endScenePosition.z - startScenePosition.z) * inverseScale) /
+          CREATION_VELOCITY_DRAG_SECONDS,
+      },
+    });
+  }
+
+  private releaseCreationPointer(pointerId: number): void {
+    const canvas = this.renderer.domElement;
+    if (canvas.hasPointerCapture(pointerId)) {
+      canvas.releasePointerCapture(pointerId);
+    }
+    this.creationDragStartScene = null;
+    this.creationPointerId = null;
+  }
+
+  private cancelCreationDrag(): void {
+    if (this.creationPointerId !== null) {
+      this.releaseCreationPointer(this.creationPointerId);
+    } else {
+      this.creationDragStartScene = null;
+    }
+  }
+
+  private updateCreationOverlay(): void {
+    const state = this.creationState;
+    if (state?.enabled !== true) {
+      this.clearCreationOverlay();
+      this.updateCreationResourceDiagnostics();
+      return;
+    }
+
+    const activeBodyIds = new Set(state.draftBodies.map((body) => body.id));
+    for (const [bodyId, visual] of this.creationBodyVisuals) {
+      if (!activeBodyIds.has(bodyId)) {
+        this.scene.remove(visual.mesh);
+        visual.mesh.geometry.dispose();
+        visual.mesh.material.dispose();
+        this.creationBodyVisuals.delete(bodyId);
+      }
+    }
+
+    for (const body of state.draftBodies) {
+      let visual = this.creationBodyVisuals.get(body.id);
+      if (visual === undefined) {
+        const material = new MeshBasicMaterial({
+          color: state.color,
+          depthTest: false,
+          depthWrite: false,
+          opacity: 0.76,
+          transparent: true,
+        });
+        const mesh = new Mesh(new SphereGeometry(1, 32, 20), material);
+        mesh.renderOrder = 5;
+        visual = { bodyId: body.id, mesh, physicalRadiusSceneUnits: 0 };
+        this.creationBodyVisuals.set(body.id, visual);
+        this.scene.add(mesh);
+      }
+      const position = positionMetersToScene(body.positionMeters, this.metersToSceneUnit);
+      visual.mesh.position.set(position.x, position.y, position.z);
+      visual.mesh.material.color.setHex(state.color);
+      visual.mesh.material.opacity = state.previewPending ? 0.56 : 0.8;
+      visual.physicalRadiusSceneUnits = physicalRadiusToSceneUnits(
+        body.radiusMeters,
+        this.metersToSceneUnit,
+      );
+    }
+
+    this.updateCreationVelocityArrow(state);
+    this.updateCreationTrajectories(state);
+    this.updateCreationResourceDiagnostics();
+  }
+
+  private updateCreationVelocityArrow(state: CreationOverlayState): void {
+    const placement = state.placement;
+    if (placement === null) {
+      this.creationVelocityArrow.visible = false;
+      return;
+    }
+    const origin = positionMetersToScene(placement.positionMeters, this.metersToSceneUnit);
+    const velocityScene = new Vector3(
+      placement.velocityMetersPerSecond.x,
+      placement.velocityMetersPerSecond.y,
+      placement.velocityMetersPerSecond.z,
+    ).multiplyScalar(CREATION_VELOCITY_DRAG_SECONDS * this.metersToSceneUnit);
+    const length = velocityScene.length();
+    if (length <= Number.EPSILON) {
+      this.creationVelocityArrow.visible = false;
+      return;
+    }
+
+    this.creationVelocityArrow.position.set(origin.x, origin.y, origin.z);
+    this.creationVelocityArrow.setDirection(velocityScene.normalize());
+    this.creationVelocityArrow.setLength(
+      length,
+      Math.min(0.35, length * 0.24),
+      Math.min(0.2, length * 0.16),
+    );
+    this.creationVelocityArrow.visible = true;
+  }
+
+  private updateCreationTrajectories(state: CreationOverlayState): void {
+    for (const line of this.creationTrajectoryVisuals.values()) {
+      this.scene.remove(line);
+      line.geometry.dispose();
+      line.material.dispose();
+    }
+    this.creationTrajectoryVisuals.clear();
+
+    const preview = state.preview;
+    if (preview === null) {
+      return;
+    }
+    const color =
+      preview.risk.kind === 'collision'
+        ? 0xff665e
+        : preview.risk.kind === 'escape'
+          ? 0xf0c674
+          : 0x4cc9b0;
+    for (const track of preview.tracks) {
+      if (track.points.length < 2) {
+        continue;
+      }
+      const positions = new Float32Array(track.points.length * 3);
+      for (const [index, point] of track.points.entries()) {
+        const position = positionMetersToScene(point.positionMeters, this.metersToSceneUnit);
+        positions[index * 3] = position.x;
+        positions[index * 3 + 1] = position.y;
+        positions[index * 3 + 2] = position.z;
+      }
+      const geometry = new BufferGeometry();
+      geometry.setAttribute('position', new BufferAttribute(positions, 3));
+      const material = new LineBasicMaterial({
+        color,
+        depthTest: false,
+        depthWrite: false,
+        opacity: 0.9,
+        transparent: true,
+      });
+      const line = new Line(geometry, material);
+      line.renderOrder = 4;
+      this.creationTrajectoryVisuals.set(track.bodyId, line);
+      this.scene.add(line);
+    }
+  }
+
+  private clearCreationOverlay(): void {
+    for (const visual of this.creationBodyVisuals.values()) {
+      this.scene.remove(visual.mesh);
+      visual.mesh.geometry.dispose();
+      visual.mesh.material.dispose();
+    }
+    this.creationBodyVisuals.clear();
+    for (const line of this.creationTrajectoryVisuals.values()) {
+      this.scene.remove(line);
+      line.geometry.dispose();
+      line.material.dispose();
+    }
+    this.creationTrajectoryVisuals.clear();
+    this.creationVelocityArrow.visible = false;
+  }
+
+  private updateCreationResourceDiagnostics(): void {
+    if (!this.exposeMarkerDiagnostics) {
+      return;
+    }
+    const canvas = this.renderer.domElement;
+    if (this.creationState?.enabled === true) {
+      canvas.dataset.creationBodyVisualCount = String(this.creationBodyVisuals.size);
+      canvas.dataset.creationTrajectoryVisualCount = String(this.creationTrajectoryVisuals.size);
+      canvas.dataset.creationVelocityArrowVisible = String(this.creationVelocityArrow.visible);
+      const maxTrackStartOffset = this.computeMaximumCreationTrackStartOffset();
+      if (maxTrackStartOffset === null) {
+        delete canvas.dataset.creationMaxTrackStartOffset;
+      } else {
+        canvas.dataset.creationMaxTrackStartOffset = String(maxTrackStartOffset);
+      }
+      return;
+    }
+    delete canvas.dataset.creationBodyVisualCount;
+    delete canvas.dataset.creationMaxTrackStartOffset;
+    delete canvas.dataset.creationTrajectoryVisualCount;
+    delete canvas.dataset.creationVelocityArrowVisible;
+  }
+
+  private computeMaximumCreationTrackStartOffset(): number | null {
+    let maximumOffset: number | null = null;
+    for (const [bodyId, trajectory] of this.creationTrajectoryVisuals) {
+      const visual = this.creationBodyVisuals.get(bodyId);
+      const positions = trajectory.geometry.getAttribute('position');
+      if (visual === undefined || positions.count === 0) {
+        continue;
+      }
+      const offset = visual.mesh.position.distanceTo(
+        new Vector3(positions.getX(0), positions.getY(0), positions.getZ(0)),
+      );
+      maximumOffset = Math.max(maximumOffset ?? 0, offset);
+    }
+    return maximumOffset;
+  }
 
   private computeCurrentFocusFrame(): ObservatoryCameraFrame | null {
     if (this.focusBodyId === null) {
@@ -621,6 +1043,7 @@ export class ObservatoryScene {
 
     const canvas = this.renderer.domElement;
     canvas.removeEventListener('pointerdown', this.handlePointerDown);
+    canvas.removeEventListener('pointermove', this.handlePointerMove);
     canvas.removeEventListener('pointerup', this.handlePointerUp);
     canvas.removeEventListener('pointercancel', this.handlePointerCancel);
     this.scene.traverse(disposeRenderable);

@@ -1,5 +1,6 @@
 import { useEffect, useRef, type JSX } from 'react';
 
+import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import type { BodyState } from '../../../physics/protocol/schemas';
 import {
   createObservatoryRenderer,
@@ -13,9 +14,11 @@ import './universe-viewport.css';
 export interface UniverseViewportProps {
   readonly bodies: readonly BodyState[];
   readonly className?: string;
+  readonly creationState?: CreationOverlayState | null;
   readonly focusBodyId: string | null;
   readonly onBackendChange?: (backend: RendererBackend) => void;
   readonly onError?: (error: Error) => void;
+  readonly onCreationPlacementChange?: (placement: CreationPlacement) => void;
   readonly onSelectBody: (bodyId: string) => void;
   readonly selectedBodyId: string | null;
 }
@@ -23,26 +26,38 @@ export interface UniverseViewportProps {
 export function UniverseViewport({
   bodies,
   className,
+  creationState = null,
   focusBodyId,
   onBackendChange,
   onError,
+  onCreationPlacementChange,
   onSelectBody,
   selectedBodyId,
 }: UniverseViewportProps): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ObservatoryScene | null>(null);
   const bodiesRef = useRef(bodies);
+  const creationStateRef = useRef(creationState);
   const focusBodyIdRef = useRef(focusBodyId);
   const selectedBodyIdRef = useRef(selectedBodyId);
   const onBackendChangeRef = useRef(onBackendChange);
   const onErrorRef = useRef(onError);
+  const onCreationPlacementChangeRef = useRef(onCreationPlacementChange);
   const onSelectBodyRef = useRef(onSelectBody);
 
   useEffect(() => {
     bodiesRef.current = bodies;
     selectedBodyIdRef.current = selectedBodyId;
     sceneRef.current?.update(bodies, selectedBodyId);
+    if (focusBodyIdRef.current !== null) {
+      sceneRef.current?.focusBody(focusBodyIdRef.current);
+    }
   }, [bodies, selectedBodyId]);
+
+  useEffect(() => {
+    creationStateRef.current = creationState;
+    sceneRef.current?.setCreationState(creationState);
+  }, [creationState]);
 
   useEffect(() => {
     focusBodyIdRef.current = focusBodyId;
@@ -56,8 +71,9 @@ export function UniverseViewport({
   useEffect(() => {
     onBackendChangeRef.current = onBackendChange;
     onErrorRef.current = onError;
+    onCreationPlacementChangeRef.current = onCreationPlacementChange;
     onSelectBodyRef.current = onSelectBody;
-  }, [onBackendChange, onError, onSelectBody]);
+  }, [onBackendChange, onCreationPlacementChange, onError, onSelectBody]);
 
   useEffect(() => {
     const mount = mountRef.current;
@@ -86,6 +102,9 @@ export function UniverseViewport({
           backend,
           mount,
           onError: (error) => onErrorRef.current?.(error),
+          onCreationPlacementChange: (placement) => {
+            onCreationPlacementChangeRef.current?.(placement);
+          },
           onSelectBody: (bodyId) => {
             onSelectBodyRef.current(bodyId);
           },
@@ -99,6 +118,7 @@ export function UniverseViewport({
         } else {
           scene.focusBody(focusBodyIdRef.current);
         }
+        scene.setCreationState(creationStateRef.current);
         onBackendChangeRef.current?.(backend);
       })
       .catch(async (error: unknown) => {

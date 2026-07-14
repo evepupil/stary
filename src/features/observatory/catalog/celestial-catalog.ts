@@ -1,8 +1,12 @@
+import { getCreationPreset, parseCreatedBodyId } from '../../creation/model/body-presets';
+
 export const CELESTIAL_GROUPS = [
   { id: 'star', label: '恒星', order: 0 },
   { id: 'inner-planet', label: '内行星', order: 1 },
   { id: 'outer-planet', label: '外行星', order: 2 },
   { id: 'satellite', label: '卫星', order: 3 },
+  { id: 'compact-object', label: '致密天体', order: 4 },
+  { id: 'minor-body', label: '小天体', order: 5 },
 ] as const;
 
 export type CelestialGroupId = (typeof CELESTIAL_GROUPS)[number]['id'];
@@ -13,7 +17,7 @@ export interface CelestialCatalogEntry {
   readonly type: string;
   readonly order: number;
   readonly color: number;
-  readonly orbitParentId: string | null;
+  readonly orbitParentId?: string | null;
   readonly group: CelestialGroupId;
 }
 
@@ -115,7 +119,39 @@ const catalogById: ReadonlyMap<string, CelestialCatalogEntry> = new Map(
 );
 
 export function getCelestialCatalogEntry(bodyId: string): CelestialCatalogEntry | null {
-  return catalogById.get(bodyId) ?? null;
+  const catalogEntry = catalogById.get(bodyId);
+  if (catalogEntry !== undefined) {
+    return catalogEntry;
+  }
+
+  const identity = parseCreatedBodyId(bodyId);
+  if (identity === null) {
+    return null;
+  }
+  const preset = getCreationPreset(identity.presetId);
+  const ordinalLabel = String(identity.ordinal).padStart(2, '0');
+  const memberLabel =
+    identity.memberIndex === null ? '' : `-${String(identity.memberIndex).padStart(2, '0')}`;
+  const groupByPreset = {
+    star: 'star',
+    'rocky-planet': 'inner-planet',
+    'gas-giant': 'outer-planet',
+    moon: 'satellite',
+    'black-hole': 'compact-object',
+    'asteroid-cluster': 'minor-body',
+  } as const satisfies Record<typeof identity.presetId, CelestialGroupId>;
+
+  return {
+    id: bodyId,
+    name:
+      identity.presetId === 'asteroid-cluster'
+        ? `小行星 ${ordinalLabel}${memberLabel}`
+        : `${preset.label} ${ordinalLabel}`,
+    type: preset.typeLabel,
+    order: 10_000 + identity.ordinal * 100 + (identity.memberIndex ?? 0),
+    color: preset.color,
+    group: groupByPreset[identity.presetId],
+  };
 }
 
 export function celestialColorToCss(color: number): string {

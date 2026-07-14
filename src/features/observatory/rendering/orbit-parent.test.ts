@@ -35,4 +35,21 @@ describe('orbit parent', () => {
     expect(findOrbitParent(comet, extendedBodies)).toBe(sun);
     expect(findMostMassiveBody(extendedBodies)).toBe(sun);
   });
+
+  it('用户创建的卫星按当前位置选择引力最强的父体', () => {
+    const createdMoon = {
+      ...createBody('created-moon-01', 7e22),
+      positionMeters: { x: 1_000_001, y: 0, z: 0 },
+    };
+    const distantSun = {
+      ...sun,
+      positionMeters: { x: 0, y: 0, z: 0 },
+    };
+    const nearbyEarth = {
+      ...earth,
+      positionMeters: { x: 1_000_000, y: 0, z: 0 },
+    };
+
+    expect(findOrbitParent(createdMoon, [distantSun, nearbyEarth, createdMoon])).toBe(nearbyEarth);
+  });
 });

@@ -39,4 +39,16 @@ describe('celestial catalog', () => {
     expect(celestialColorToCss(getCelestialCatalogEntry('earth')?.color ?? 0)).toBe('#4d9bd6');
     expect(celestialColorToCss(0)).toBe('#000000');
   });
+
+  it('从稳定 id 恢复用户创建天体的名称、类型和分组', () => {
+    expect(getCelestialCatalogEntry('created-black-hole-02')).toMatchObject({
+      name: '黑洞 02',
+      group: 'compact-object',
+      type: '5 倍太阳质量黑洞',
+    });
+    expect(getCelestialCatalogEntry('created-asteroid-cluster-01-member-04')).toMatchObject({
+      name: '小行星 01-04',
+      group: 'minor-body',
+    });
+  });
 });

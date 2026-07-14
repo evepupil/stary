@@ -2,6 +2,7 @@ import { useMemo, useState } from 'react';
 
 import { Activity, ListTree, Maximize2, RotateCcw, X } from 'lucide-react';
 
+import { CreationModeSwitcher, CreationPanel, useBodyCreation } from '../features/creation';
 import { BodyDirectory } from '../features/observatory/components/BodyDirectory';
 import { BodyInspector } from '../features/observatory/components/BodyInspector';
 import { ObservatoryHeader } from '../features/observatory/components/ObservatoryHeader';
@@ -20,6 +21,14 @@ export function App() {
   const [selectedBodyId, setSelectedBodyId] = useState<string | null>('earth');
   const [focusedBodyId, setFocusedBodyId] = useState<string | null>(null);
   const [viewportKey, setViewportKey] = useState(0);
+  const creation = useBodyCreation({
+    simulation,
+    onCommitted: (bodyId) => {
+      setSelectedBodyId(bodyId);
+      setFocusedBodyId(bodyId);
+      setMobilePanel(null);
+    },
+  });
 
   const effectiveSelectedBodyId = simulation.bodies.some((body) => body.id === selectedBodyId)
     ? selectedBodyId
@@ -29,7 +38,7 @@ export function App() {
     () => simulation.bodies.find((body) => body.id === effectiveSelectedBodyId) ?? null,
     [effectiveSelectedBodyId, simulation.bodies],
   );
-  const visibleError = renderError ?? simulation.error;
+  const visibleError = renderError ?? (simulation.phase === 'error' ? simulation.error : null);
   const simulationTime = formatSimulationTime(simulation.simulationTimeSeconds);
   const viewMode = focusedBodyId === null ? 'overview' : 'focus';
 
@@ -54,6 +63,10 @@ export function App() {
     <main
       className="observatory-shell"
       data-phase={simulation.phase}
+      data-mode={creation.mode}
+      data-creation-phase={creation.mode === 'create' ? creation.phase : 'inactive'}
+      data-body-revision={simulation.bodyRevision}
+      data-body-snapshot-time-seconds={simulation.bodySnapshotSimulationTimeSeconds}
       data-simulation-time-seconds={simulation.simulationTimeSeconds}
       data-view-mode={viewMode}
       data-worker-state-sequence={simulation.latestStateSequence}
@@ -61,6 +74,7 @@ export function App() {
       <UniverseViewport
         bodies={simulation.bodies}
         className="universe-viewport"
+        creationState={creation.overlayState}
         focusBodyId={focusedBodyId}
         key={viewportKey}
         onBackendChange={(nextBackend) => {
@@ -68,8 +82,9 @@ export function App() {
         }}
         onError={(error) => {
           setRenderError(error);
-          simulation.pause();
+          void simulation.pause().catch(() => undefined);
         }}
+        onCreationPlacementChange={creation.updatePlacement}
         onSelectBody={selectBody}
         selectedBodyId={effectiveSelectedBodyId}
       />
@@ -90,6 +105,17 @@ export function App() {
         backend={backend}
         runState={simulation.runState}
         simulationTime={simulationTime}
+      />
+
+      <CreationModeSwitcher
+        mode={creation.mode}
+        onModeChange={(mode) => {
+          if (mode === 'create') {
+            creation.enter();
+          } else {
+            creation.cancel();
+          }
+        }}
       />
 
       <aside
@@ -116,29 +142,42 @@ export function App() {
         />
       </aside>
 
-      <aside
-        aria-label="天体数据"
-        className="observatory-panel body-inspector-panel"
-        data-mobile-open={mobilePanel === 'details'}
-      >
-        <button
-          aria-label="关闭天体数据"
-          className="mobile-panel-close"
-          onClick={() => {
-            setMobilePanel(null);
-          }}
-          title="关闭"
-          type="button"
+      {creation.mode === 'observe' ? (
+        <aside
+          aria-label="天体数据"
+          className="observatory-panel body-inspector-panel"
+          data-mobile-open={mobilePanel === 'details'}
         >
-          <X aria-hidden="true" size={18} />
-        </button>
-        <BodyInspector
-          baselineDiagnostics={simulation.baselineDiagnostics}
-          body={selectedBody}
-          bodies={simulation.bodies}
-          diagnostics={simulation.diagnostics}
+          <button
+            aria-label="关闭天体数据"
+            className="mobile-panel-close"
+            onClick={() => {
+              setMobilePanel(null);
+            }}
+            title="关闭"
+            type="button"
+          >
+            <X aria-hidden="true" size={18} />
+          </button>
+          <BodyInspector
+            baselineDiagnostics={simulation.baselineDiagnostics}
+            body={selectedBody}
+            bodies={simulation.bodies}
+            diagnostics={simulation.diagnostics}
+          />
+        </aside>
+      ) : (
+        <CreationPanel
+          draft={creation.draft}
+          error={creation.error}
+          onCancel={creation.cancel}
+          onConfirm={creation.confirm}
+          onPresetChange={creation.selectPreset}
+          phase={creation.phase}
+          presetId={creation.presetId}
+          preview={creation.preview}
         />
-      </aside>
+      )}
 
       <nav aria-label="手机端数据面板" className="mobile-panel-tabs">
         <button
@@ -168,11 +207,19 @@ export function App() {
       </nav>
 
       <TimeControls
-        commandPending={simulation.commandPending}
-        onPause={simulation.pause}
-        onSetTimeScale={simulation.setTimeScale}
-        onStart={simulation.start}
-        onStep={simulation.step}
+        commandPending={simulation.commandPending || creation.mode === 'create'}
+        onPause={() => {
+          void simulation.pause().catch(() => undefined);
+        }}
+        onSetTimeScale={(timeScale) => {
+          void simulation.setTimeScale(timeScale).catch(() => undefined);
+        }}
+        onStart={() => {
+          void simulation.start().catch(() => undefined);
+        }}
+        onStep={(stepSeconds) => {
+          void simulation.step(stepSeconds).catch(() => undefined);
+        }}
         runState={simulation.runState}
         timeScale={simulation.timeScale}
       />

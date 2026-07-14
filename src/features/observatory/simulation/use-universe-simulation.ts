@@ -34,16 +34,16 @@ export interface UniverseSimulation {
   readonly error: Error | null;
   readonly commandPending: boolean;
   readonly latestStateSequence: number;
-  readonly start: () => void;
-  readonly pause: () => void;
-  readonly toggle: () => void;
-  readonly step: (stepSeconds?: number) => void;
-  readonly setTimeScale: (timeScale: number) => void;
+  readonly start: () => Promise<void>;
+  readonly pause: () => Promise<void>;
+  readonly toggle: () => Promise<void>;
+  readonly step: (stepSeconds?: number) => Promise<void>;
+  readonly setTimeScale: (timeScale: number) => Promise<void>;
   readonly replaceBodies: (
     bodies: readonly BodyState[],
     expectedBodyRevision: number,
     expectedSimulationTimeSeconds: number,
-  ) => void;
+  ) => Promise<void>;
   readonly retry: () => void;
 }
 
@@ -87,12 +87,15 @@ export function useUniverseSimulation(): UniverseSimulation {
   }, []);
 
   const enqueueCommand = useCallback(
-    (command: ControllerCommand) => {
+    (command: ControllerCommand): Promise<void> => {
       const controller = controllerRef.current;
       const generation = generationRef.current;
       if (controller === null) {
-        reportError(new Error('物理 Worker 尚未就绪'), generation, false);
-        return;
+        const error = new Error('物理 Worker 尚未就绪');
+        reportError(error, generation, false);
+        const rejected = Promise.reject(error);
+        void rejected.catch(() => undefined);
+        return rejected;
       }
 
       pendingCommandCountRef.current += 1;
@@ -120,6 +123,7 @@ export function useUniverseSimulation(): UniverseSimulation {
         .finally(() => {
           finishPendingCommand(generation);
         });
+      return commandResult;
     },
     [finishPendingCommand, reportError],
   );
@@ -216,22 +220,22 @@ export function useUniverseSimulation(): UniverseSimulation {
   }, [finishPendingCommand, reportError, restartKey]);
 
   const start = useCallback(() => {
-    enqueueCommand((controller) => controller.start());
+    return enqueueCommand((controller) => controller.start());
   }, [enqueueCommand]);
 
   const pause = useCallback(() => {
-    enqueueCommand((controller) => controller.pause());
+    return enqueueCommand((controller) => controller.pause());
   }, [enqueueCommand]);
 
   const toggle = useCallback(() => {
-    enqueueCommand((controller) =>
+    return enqueueCommand((controller) =>
       runStateRef.current === 'running' ? controller.pause() : controller.start(),
     );
   }, [enqueueCommand]);
 
   const step = useCallback(
     (stepSeconds = DEFAULT_OBSERVATORY_STEP_SECONDS) => {
-      enqueueCommand(async (controller) => {
+      return enqueueCommand(async (controller) => {
         if (runStateRef.current === 'running') {
           await controller.pause();
         }
@@ -243,7 +247,7 @@ export function useUniverseSimulation(): UniverseSimulation {
 
   const setTimeScale = useCallback(
     (timeScale: number) => {
-      enqueueCommand((controller) => controller.setTimeScale(timeScale));
+      return enqueueCommand((controller) => controller.setTimeScale(timeScale));
     },
     [enqueueCommand],
   );
@@ -254,7 +258,7 @@ export function useUniverseSimulation(): UniverseSimulation {
       expectedBodyRevision: number,
       expectedSimulationTimeSeconds: number,
     ) => {
-      enqueueCommand((controller) =>
+      return enqueueCommand((controller) =>
         controller.replaceBodies(bodies, expectedBodyRevision, expectedSimulationTimeSeconds),
       );
     },

@@ -1,5 +1,6 @@
 import type { BodyState, PhysicsDiagnostics } from '../../../physics/protocol/schemas';
 import { celestialColorToCss, getCelestialCatalogEntry } from '../catalog';
+import { findOrbitParent } from '../rendering/orbit-parent';
 import {
   calculateRelativeSpeedMetersPerSecond,
   createDiagnosticsViewModel,
@@ -35,10 +36,7 @@ export function BodyInspector({
 
   const distance = vectorMagnitude(body.positionMeters);
   const metadata = getCelestialCatalogEntry(body.id);
-  const parent =
-    metadata?.orbitParentId === null || metadata?.orbitParentId === undefined
-      ? null
-      : (bodies.find((candidate) => candidate.id === metadata.orbitParentId) ?? null);
+  const parent = findOrbitParent(body, bodies);
   const speed = calculateRelativeSpeedMetersPerSecond(body, parent);
   const speedReferenceLabel =
     parent === null

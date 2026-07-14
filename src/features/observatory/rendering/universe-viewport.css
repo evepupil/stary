@@ -21,3 +21,8 @@
 .universe-viewport__canvas:active {
   cursor: grabbing;
 }
+
+.universe-viewport__canvas[data-creation-active='true'],
+.universe-viewport__canvas[data-creation-active='true']:active {
+  cursor: crosshair;
+}
