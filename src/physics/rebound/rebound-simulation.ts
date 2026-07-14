@@ -35,6 +35,7 @@ const VECTOR_COMPONENT = {
 
 export interface CreateReboundSimulationOptions {
   readonly gravitationalConstant?: number;
+  readonly initialTimeSeconds?: number;
   readonly initialTimestepSeconds?: number;
   readonly locateFile?: ReboundModuleOptions['locateFile'];
   readonly moduleFactory?: ReboundModuleFactory;
@@ -135,16 +136,18 @@ class ReboundSimulationAdapter implements ReboundSimulation {
     private readonly module: ReboundEmscriptenModule,
     handle: ReboundHandle,
     private readonly bodyIds: readonly string[],
+    private readonly timeOriginSeconds: number,
   ) {
     this.handle = handle;
   }
 
   public get timeSeconds(): number {
     const handle = this.requireHandle();
-    return nonNegativeFiniteNumber(
-      'REBOUND simulation time',
+    const localTimeSeconds = nonNegativeFiniteNumber(
+      'REBOUND local simulation time',
       this.module._stary_reb_get_time(handle),
     );
+    return finiteNumber('REBOUND simulation time', this.timeOriginSeconds + localTimeSeconds);
   }
 
   public integrateTo(targetTimeSeconds: number): void {
@@ -156,9 +159,13 @@ class ReboundSimulationAdapter implements ReboundSimulation {
       );
     }
 
+    const localTargetTimeSeconds = finiteNumber(
+      'localTargetTimeSeconds',
+      targetTimeSeconds - this.timeOriginSeconds,
+    );
     checkStatus(
       'integrateTo',
-      this.module._stary_reb_integrate(this.requireHandle(), targetTimeSeconds),
+      this.module._stary_reb_integrate(this.requireHandle(), localTargetTimeSeconds),
     );
     void this.timeSeconds;
   }
@@ -284,6 +291,10 @@ export async function createReboundSimulation(
     'initialTimestepSeconds',
     options.initialTimestepSeconds ?? DEFAULT_IAS15_INITIAL_TIMESTEP_SECONDS,
   );
+  const initialTimeSeconds = nonNegativeFiniteNumber(
+    'initialTimeSeconds',
+    options.initialTimeSeconds ?? 0,
+  );
   const factory = options.moduleFactory ?? createReboundModule;
   const module = await factory(moduleOptions(options.wasmBinary, options.locateFile));
   const handle = module._stary_reb_create(gravitationalConstant);
@@ -318,6 +329,7 @@ export async function createReboundSimulation(
       module,
       handle,
       bodies.map((body) => body.id),
+      initialTimeSeconds,
     );
   } catch (error) {
     module._stary_reb_destroy(handle);

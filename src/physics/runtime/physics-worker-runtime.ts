@@ -2,7 +2,11 @@ import { ZodError } from 'zod';
 
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from '../protocol/parse-message';
 import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
-import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
+import {
+  bodyStatesSchema,
+  PHYSICS_PROTOCOL_VERSION,
+  physicsDiagnosticsSchema,
+} from '../protocol/schemas';
 import { SessionSequenceGate } from '../protocol/session-sequence-gate';
 import {
   browserPhysicsScheduler,
@@ -39,7 +43,9 @@ export class PhysicsWorkerRuntime {
   readonly #createSimulation: CreatePhysicsSimulation;
   readonly #postMessage: (message: WorkerToMainMessage) => void;
   readonly #scheduler: PhysicsScheduler;
+  #activeRequestSequence: number | null = null;
   #commandGate: SessionSequenceGate | undefined;
+  #bodyRevision = 0;
   #disposed = false;
   #lastRealTimeMilliseconds: number | undefined;
   #nextResponseSequence = 0;
@@ -84,6 +90,15 @@ export class PhysicsWorkerRuntime {
       return;
     }
 
+    this.#activeRequestSequence = message.sequence;
+    try {
+      await this.#processMessage(message);
+    } finally {
+      this.#activeRequestSequence = null;
+    }
+  }
+
+  async #processMessage(message: MainToWorkerMessage): Promise<void> {
     if (this.#commandGate === undefined) {
       if (message.type !== 'initialize') {
         this.#sessionId = message.sessionId;
@@ -123,6 +138,9 @@ export class PhysicsWorkerRuntime {
       case 'setTimeScale':
         this.#setTimeScale(message.timeScale);
         break;
+      case 'replaceBodies':
+        await this.#replaceBodies(message);
+        break;
       case 'dispose':
         this.#dispose();
         break;
@@ -135,9 +153,9 @@ export class PhysicsWorkerRuntime {
     this.#commandGate.accept(message);
 
     try {
-      this.#simulation = await this.#createSimulation(message.bodies);
+      this.#simulation = await this.#createSimulation(message.bodies, 0);
       this.#runState = 'initialized';
-      this.#send({ type: 'ready' });
+      this.#send({ type: 'ready', bodyRevision: 0 });
     } catch (error) {
       this.#runState = undefined;
       this.#simulation?.destroy();
@@ -215,6 +233,68 @@ export class PhysicsWorkerRuntime {
     }
     this.#timeScale = timeScale;
     this.#sendStatus();
+  }
+
+  async #replaceBodies(
+    message: Extract<MainToWorkerMessage, { type: 'replaceBodies' }>,
+  ): Promise<void> {
+    const previousSimulation = this.#requireLiveSimulation();
+    if (previousSimulation === undefined) {
+      return;
+    }
+    if (this.#runState !== 'paused') {
+      this.#failSafely('invalidState', '只有暂停状态可以修改天体');
+      return;
+    }
+    if (message.expectedBodyRevision !== this.#bodyRevision) {
+      this.#sendError(
+        'bodyRevisionConflict',
+        `天体修订号冲突：预期 ${String(this.#bodyRevision)}，实际 ${String(message.expectedBodyRevision)}`,
+        true,
+      );
+      return;
+    }
+
+    const simulationTimeSeconds = previousSimulation.timeSeconds;
+    if (message.expectedSimulationTimeSeconds !== simulationTimeSeconds) {
+      this.#sendError(
+        'bodySnapshotConflict',
+        `天体快照时间冲突：预期 ${String(simulationTimeSeconds)}，实际 ${String(message.expectedSimulationTimeSeconds)}`,
+        true,
+      );
+      return;
+    }
+    let candidateSimulation: PhysicsSimulation | undefined;
+    let candidateBodies: BodyState[] | undefined;
+    let candidateDiagnostics:
+      Extract<WorkerToMainMessage, { type: 'bodiesReplaced' }>['diagnostics'] | undefined;
+    try {
+      candidateSimulation = await this.#createSimulation(message.bodies, simulationTimeSeconds);
+      if (candidateSimulation.timeSeconds !== simulationTimeSeconds) {
+        throw new Error('候选物理模拟没有保留当前模拟时间');
+      }
+      const snapshot = candidateSimulation.snapshot();
+      candidateBodies = bodyStatesSchema.parse([...snapshot.bodies]);
+      candidateDiagnostics = physicsDiagnosticsSchema.parse(snapshot.diagnostics);
+    } catch (error) {
+      if (candidateSimulation !== undefined && candidateSimulation !== previousSimulation) {
+        candidateSimulation.destroy();
+      }
+      this.#sendError('bodyReplacementFailed', describeProtocolError(error), true);
+      return;
+    }
+
+    this.#simulation = candidateSimulation;
+    this.#bodyRevision += 1;
+    if (candidateSimulation !== previousSimulation) {
+      previousSimulation.destroy();
+    }
+    this.#send({
+      type: 'bodiesReplaced',
+      bodyRevision: this.#bodyRevision,
+      bodies: candidateBodies,
+      diagnostics: candidateDiagnostics,
+    });
   }
 
   #dispose(): void {
@@ -333,6 +413,7 @@ export class PhysicsWorkerRuntime {
     const snapshot = simulation.snapshot();
     this.#send({
       type: 'state',
+      bodyRevision: this.#bodyRevision,
       bodies: [...snapshot.bodies],
       diagnostics: snapshot.diagnostics,
     });
@@ -351,17 +432,28 @@ export class PhysicsWorkerRuntime {
       code,
       message: boundedErrorMessage(message),
       recoverable,
+      requestSequence: this.#activeRequestSequence,
     });
   }
 
   #send(
     payload:
-      | { readonly type: 'ready' }
+      | { readonly bodyRevision: 0; readonly type: 'ready' }
       | { readonly type: 'disposed' }
       | {
+          readonly bodyRevision: number;
           readonly bodies: BodyState[];
           readonly diagnostics: Extract<WorkerToMainMessage, { type: 'state' }>['diagnostics'];
           readonly type: 'state';
+        }
+      | {
+          readonly bodyRevision: number;
+          readonly bodies: BodyState[];
+          readonly diagnostics: Extract<
+            WorkerToMainMessage,
+            { type: 'bodiesReplaced' }
+          >['diagnostics'];
+          readonly type: 'bodiesReplaced';
         }
       | {
           readonly runState: RuntimeRunState;
@@ -372,6 +464,7 @@ export class PhysicsWorkerRuntime {
           readonly code: WorkerErrorCode;
           readonly message: string;
           readonly recoverable: boolean;
+          readonly requestSequence: number | null;
           readonly type: 'error';
         },
     simulationTimeSeconds = this.#simulation?.timeSeconds ?? 0,

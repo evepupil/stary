@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { parseWorkerToMainMessage } from '../protocol/parse-message';
 import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
-import { MAX_TIME_SCALE } from '../protocol/schemas';
+import { MAX_TIME_SCALE, PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
 import { createCircularSunEarthScenario } from '../scenarios/sun-earth';
 import type { PhysicsScheduler, ScheduledPhysicsTask } from './physics-scheduler';
 import type { PhysicsSimulation } from './physics-simulation';
@@ -50,14 +50,20 @@ class FakeScheduler implements PhysicsScheduler {
 }
 
 class FakeSimulation implements PhysicsSimulation {
-  destroyed = false;
+  destroyCount = 0;
   failIntegration = false;
-  timeSeconds = 0;
+  failSnapshot = false;
+  timeSeconds: number;
 
-  constructor(readonly bodies: readonly BodyState[]) {}
+  constructor(
+    readonly bodies: readonly BodyState[],
+    initialTimeSeconds = 0,
+  ) {
+    this.timeSeconds = initialTimeSeconds;
+  }
 
   destroy(): void {
-    this.destroyed = true;
+    this.destroyCount += 1;
   }
 
   integrateTo(targetTimeSeconds: number): void {
@@ -68,6 +74,9 @@ class FakeSimulation implements PhysicsSimulation {
   }
 
   snapshot() {
+    if (this.failSnapshot) {
+      throw new Error('fake snapshot failure');
+    }
     return { bodies: this.bodies, diagnostics };
   }
 }
@@ -78,10 +87,16 @@ function command(
     | { readonly bodies: readonly BodyState[]; readonly type: 'initialize' }
     | { readonly type: 'start' | 'pause' | 'dispose' }
     | { readonly stepSeconds: number; readonly type: 'step' }
-    | { readonly timeScale: number; readonly type: 'setTimeScale' },
+    | { readonly timeScale: number; readonly type: 'setTimeScale' }
+    | {
+        readonly bodies: readonly BodyState[];
+        readonly expectedBodyRevision: number;
+        readonly expectedSimulationTimeSeconds: number;
+        readonly type: 'replaceBodies';
+      },
 ): MainToWorkerMessage {
   return {
-    version: 1,
+    version: PHYSICS_PROTOCOL_VERSION,
     sessionId: 'session-a',
     sequence,
     simulationTimeSeconds: 0,
@@ -89,16 +104,46 @@ function command(
   } as MainToWorkerMessage;
 }
 
-function createHarness() {
+function replacementBodies(): readonly BodyState[] {
+  return [
+    ...createCircularSunEarthScenario().bodies,
+    {
+      id: 'planet',
+      massKg: 1e20,
+      radiusMeters: 1_000,
+      positionMeters: { x: 2e11, y: 0, z: 0 },
+      velocityMetersPerSecond: { x: 0, y: 25_000, z: 0 },
+    },
+  ];
+}
+
+function createHarness(replacementFailure?: 'create' | 'snapshot' | 'time') {
   const scheduler = new FakeScheduler();
   const simulation = new FakeSimulation(createCircularSunEarthScenario().bodies);
+  const simulations: FakeSimulation[] = [simulation];
+  let creationCount = 0;
   const messages: WorkerToMainMessage[] = [];
   let closed = false;
   const runtime = new PhysicsWorkerRuntime({
     closeWorker: () => {
       closed = true;
     },
-    createSimulation: () => Promise.resolve(simulation),
+    createSimulation: (bodies, initialTimeSeconds) => {
+      creationCount += 1;
+      if (creationCount === 1) {
+        return Promise.resolve(simulation);
+      }
+      if (replacementFailure === 'create') {
+        return Promise.reject(new Error('fake replacement creation failure'));
+      }
+      const candidate = new FakeSimulation(bodies, initialTimeSeconds);
+      candidate.failSnapshot = replacementFailure === 'snapshot';
+      if (replacementFailure === 'time') {
+        candidate.timeSeconds += 1;
+      }
+      simulations.push(candidate);
+      return Promise.resolve(candidate);
+    },
     postMessage: (message) => {
       messages.push(parseWorkerToMainMessage(message));
     },
@@ -112,6 +157,7 @@ function createHarness() {
     runtime,
     scheduler,
     simulation,
+    simulations,
   };
 }
 
@@ -187,6 +233,213 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.simulation.timeSeconds).toBe(0);
     expect(harness.scheduler.tasks.size).toBe(0);
     expect(harness.messages.at(-1)).toMatchObject({ type: 'status', runState: 'paused' });
+  });
+
+  it('运行中直接替换会安全暂停且不会创建候选实例', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'start' }));
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'invalidState',
+      recoverable: true,
+    });
+    expect(harness.scheduler.tasks.size).toBe(0);
+    expect(harness.simulations).toHaveLength(1);
+    expect(harness.simulation.destroyCount).toBe(0);
+  });
+
+  it('刚初始化时直接替换会被拒绝，暂停后才能提交', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+
+    await harness.runtime.receive(
+      command(1, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'invalidState',
+      recoverable: true,
+    });
+    expect(harness.simulations).toHaveLength(1);
+
+    await harness.runtime.receive(command(2, { type: 'pause' }));
+    await harness.runtime.receive(
+      command(3, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'bodiesReplaced',
+      bodyRevision: 1,
+    });
+  });
+
+  it('成功替换会保留时间、递增修订并把后续积分切到候选实例', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'step', stepSeconds: 123.5 }));
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 123.5,
+        bodies: replacementBodies(),
+      }),
+    );
+
+    const candidate = harness.simulations[1];
+    expect(candidate).toBeDefined();
+    expect(candidate?.timeSeconds).toBe(123.5);
+    expect(harness.simulation.destroyCount).toBe(1);
+    expect(candidate?.destroyCount).toBe(0);
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'bodiesReplaced',
+      bodyRevision: 1,
+      simulationTimeSeconds: 123.5,
+      bodies: replacementBodies(),
+    });
+
+    await harness.runtime.receive(command(3, { type: 'step', stepSeconds: 60 }));
+    expect(candidate?.timeSeconds).toBe(183.5);
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'state',
+      bodyRevision: 1,
+      simulationTimeSeconds: 183.5,
+    });
+
+    await harness.runtime.receive(command(4, { type: 'dispose' }));
+    expect(candidate?.destroyCount).toBe(1);
+  });
+
+  it.each(['create', 'snapshot', 'time'] as const)(
+    '候选 %s 失败会销毁候选并保留可继续积分的旧实例',
+    async (replacementFailure) => {
+      const harness = createHarness(replacementFailure);
+      await initialize(harness);
+      await harness.runtime.receive(command(1, { type: 'step', stepSeconds: 10 }));
+
+      await harness.runtime.receive(
+        command(2, {
+          type: 'replaceBodies',
+          expectedBodyRevision: 0,
+          expectedSimulationTimeSeconds: 10,
+          bodies: replacementBodies(),
+        }),
+      );
+
+      expect(harness.messages.at(-1)).toMatchObject({
+        type: 'error',
+        code: 'bodyReplacementFailed',
+        recoverable: true,
+        simulationTimeSeconds: 10,
+      });
+      expect(harness.simulation.destroyCount).toBe(0);
+      if (replacementFailure === 'snapshot' || replacementFailure === 'time') {
+        expect(harness.simulations[1]?.destroyCount).toBe(1);
+      } else {
+        expect(harness.simulations).toHaveLength(1);
+      }
+
+      await harness.runtime.receive(command(3, { type: 'step', stepSeconds: 5 }));
+      expect(harness.simulation.timeSeconds).toBe(15);
+      expect(harness.messages.at(-1)).toMatchObject({
+        type: 'state',
+        bodyRevision: 0,
+        simulationTimeSeconds: 15,
+      });
+    },
+  );
+
+  it('修订冲突不创建候选，下一条正确修订命令仍可成功', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'pause' }));
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 1,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'bodyRevisionConflict',
+      recoverable: true,
+    });
+    expect(harness.simulations).toHaveLength(1);
+
+    await harness.runtime.receive(
+      command(3, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'bodiesReplaced',
+      bodyRevision: 1,
+    });
+  });
+
+  it('过期模拟时间拒绝旧快照，刷新时间后可以继续替换', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'step', stepSeconds: 10 }));
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'bodySnapshotConflict',
+      recoverable: true,
+      requestSequence: 2,
+      simulationTimeSeconds: 10,
+    });
+    expect(harness.simulations).toHaveLength(1);
+    expect(harness.simulation.destroyCount).toBe(0);
+
+    await harness.runtime.receive(
+      command(3, {
+        type: 'replaceBodies',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 10,
+        bodies: replacementBodies(),
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'bodiesReplaced',
+      bodyRevision: 1,
+      simulationTimeSeconds: 10,
+    });
   });
 
   it('按真实时间和倍率推进目标时间且每个片段重新调度', async () => {
@@ -314,6 +567,7 @@ describe('PhysicsWorkerRuntime', () => {
       type: 'error',
       code: 'invalidCommand',
       recoverable: true,
+      requestSequence: 1,
     });
     expect(harness.scheduler.tasks.size).toBe(0);
 
@@ -321,6 +575,29 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'invalidCommand',
+      requestSequence: null,
+    });
+
+    await harness.runtime.reportMessageError();
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'invalidCommand',
+      requestSequence: null,
+    });
+  });
+
+  it('命令触发的积分错误带请求序号', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    harness.simulation.failIntegration = true;
+
+    await harness.runtime.receive(command(1, { type: 'step', stepSeconds: 1 }));
+
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'integrationFailed',
+      recoverable: false,
+      requestSequence: 1,
     });
   });
 
@@ -336,6 +613,7 @@ describe('PhysicsWorkerRuntime', () => {
       type: 'error',
       code: 'integrationFailed',
       recoverable: false,
+      requestSequence: null,
     });
   });
 
@@ -346,7 +624,7 @@ describe('PhysicsWorkerRuntime', () => {
     const messageCount = harness.messages.length;
     await harness.runtime.receive(command(2, { type: 'start' }));
 
-    expect(harness.simulation.destroyed).toBe(true);
+    expect(harness.simulation.destroyCount).toBe(1);
     expect(harness.closed).toBe(true);
     expect(harness.messages.at(-1)).toMatchObject({ type: 'disposed', sequence: 1 });
     expect(harness.messages).toHaveLength(messageCount);

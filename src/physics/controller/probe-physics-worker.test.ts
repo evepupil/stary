@@ -2,11 +2,19 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseWorkerToMainMessage } from '../protocol/parse-message';
 import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
+import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
 import { PhysicsWorkerController, type PhysicsWorkerTarget } from './physics-worker-controller';
 import { PHYSICS_PROBE_STEP_SECONDS, probePhysicsWorker } from './probe-physics-worker';
 
 type FakeWorkerMode =
-  'error' | 'manualStatus' | 'messageerror' | 'protocolError' | 'silent' | 'success';
+  | 'error'
+  | 'manualStatus'
+  | 'manualReplacementError'
+  | 'messageerror'
+  | 'protocolError'
+  | 'replacementError'
+  | 'silent'
+  | 'success';
 type WorkerControllerEventType = 'error' | 'message' | 'messageerror';
 
 const diagnostics = {
@@ -27,7 +35,10 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
   readonly listeners = new Map<WorkerControllerEventType, Set<EventListener>>();
   readonly postedMessages: MainToWorkerMessage[] = [];
   terminated = false;
+  #bodyRevision = 0;
+  #currentBodies: BodyState[] = [];
   #nextResponseSequence = 0;
+  #simulationTimeSeconds = 0;
 
   constructor(readonly mode: FakeWorkerMode) {}
 
@@ -56,6 +67,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
         code: 'initializationFailed',
         message: 'WASM 初始化失败',
         recoverable: false,
+        requestSequence: message.sequence,
         simulationTimeSeconds: 0,
       });
       return;
@@ -63,13 +75,16 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
 
     switch (message.type) {
       case 'initialize':
-        this.respond({ type: 'ready', simulationTimeSeconds: 0 });
+        this.#currentBodies = [...message.bodies];
+        this.respond({ type: 'ready', simulationTimeSeconds: 0, bodyRevision: 0 });
         break;
       case 'step':
+        this.#simulationTimeSeconds = message.simulationTimeSeconds + message.stepSeconds;
         this.respond({
           type: 'state',
-          simulationTimeSeconds: message.simulationTimeSeconds + message.stepSeconds,
-          bodies: this.initialBodies(),
+          simulationTimeSeconds: this.#simulationTimeSeconds,
+          bodyRevision: this.#bodyRevision,
+          bodies: this.#currentBodies,
           diagnostics,
         });
         break;
@@ -93,7 +108,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
         });
         break;
       case 'setTimeScale':
-        if (this.mode !== 'manualStatus') {
+        if (this.mode !== 'manualStatus' && this.mode !== 'manualReplacementError') {
           this.respond({
             type: 'status',
             simulationTimeSeconds: message.simulationTimeSeconds,
@@ -101,6 +116,53 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
             timeScale: message.timeScale,
           });
         }
+        break;
+      case 'replaceBodies':
+        if (message.expectedBodyRevision !== this.#bodyRevision) {
+          this.respond({
+            type: 'error',
+            code: 'bodyRevisionConflict',
+            message: '修订冲突',
+            recoverable: true,
+            requestSequence: message.sequence,
+            simulationTimeSeconds: message.simulationTimeSeconds,
+          });
+          break;
+        }
+        if (message.expectedSimulationTimeSeconds !== this.#simulationTimeSeconds) {
+          this.respond({
+            type: 'error',
+            code: 'bodySnapshotConflict',
+            message: '快照时间冲突',
+            recoverable: true,
+            requestSequence: message.sequence,
+            simulationTimeSeconds: this.#simulationTimeSeconds,
+          });
+          break;
+        }
+        if (this.mode === 'manualReplacementError') {
+          break;
+        }
+        if (this.mode === 'replacementError') {
+          this.respond({
+            type: 'error',
+            code: 'bodyReplacementFailed',
+            message: '替换失败',
+            recoverable: true,
+            requestSequence: message.sequence,
+            simulationTimeSeconds: message.simulationTimeSeconds,
+          });
+          break;
+        }
+        this.#bodyRevision += 1;
+        this.#currentBodies = [...message.bodies];
+        this.respond({
+          type: 'bodiesReplaced',
+          simulationTimeSeconds: message.simulationTimeSeconds,
+          bodyRevision: this.#bodyRevision,
+          bodies: this.#currentBodies,
+          diagnostics,
+        });
         break;
     }
   }
@@ -120,9 +182,35 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
   sendStatus(timeScale: number): void {
     this.respond({
       type: 'status',
-      simulationTimeSeconds: 0,
+      simulationTimeSeconds: this.#simulationTimeSeconds,
       runState: 'running',
       timeScale,
+    });
+  }
+
+  sendReplacementError(): void {
+    const replacement = this.postedMessages.findLast(
+      (message): message is Extract<MainToWorkerMessage, { type: 'replaceBodies' }> =>
+        message.type === 'replaceBodies',
+    );
+    this.respond({
+      type: 'error',
+      code: 'bodyReplacementFailed',
+      message: '替换失败',
+      recoverable: true,
+      requestSequence: replacement?.sequence ?? null,
+      simulationTimeSeconds: this.#simulationTimeSeconds,
+    });
+  }
+
+  sendUncorrelatedError(): void {
+    this.respond({
+      type: 'error',
+      code: 'invalidCommand',
+      message: '无法关联的外部消息',
+      recoverable: true,
+      requestSequence: null,
+      simulationTimeSeconds: this.#simulationTimeSeconds,
     });
   }
 
@@ -132,22 +220,30 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
     });
   }
 
-  private initialBodies() {
-    const initialize = this.postedMessages.find(
-      (message): message is Extract<MainToWorkerMessage, { type: 'initialize' }> =>
-        message.type === 'initialize',
-    );
-    return initialize?.bodies ?? [];
-  }
-
   private respond(
     payload:
-      | { readonly simulationTimeSeconds: number; readonly type: 'ready' | 'disposed' }
       | {
+          readonly bodyRevision: 0;
+          readonly simulationTimeSeconds: number;
+          readonly type: 'ready';
+        }
+      | { readonly simulationTimeSeconds: number; readonly type: 'disposed' }
+      | {
+          readonly bodyRevision: number;
           readonly bodies: Extract<WorkerToMainMessage, { type: 'state' }>['bodies'];
           readonly diagnostics: Extract<WorkerToMainMessage, { type: 'state' }>['diagnostics'];
           readonly simulationTimeSeconds: number;
           readonly type: 'state';
+        }
+      | {
+          readonly bodyRevision: number;
+          readonly bodies: Extract<WorkerToMainMessage, { type: 'bodiesReplaced' }>['bodies'];
+          readonly diagnostics: Extract<
+            WorkerToMainMessage,
+            { type: 'bodiesReplaced' }
+          >['diagnostics'];
+          readonly simulationTimeSeconds: number;
+          readonly type: 'bodiesReplaced';
         }
       | {
           readonly runState: Extract<WorkerToMainMessage, { type: 'status' }>['runState'];
@@ -159,13 +255,14 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
           readonly code: Extract<WorkerToMainMessage, { type: 'error' }>['code'];
           readonly message: string;
           readonly recoverable: boolean;
+          readonly requestSequence: number | null;
           readonly simulationTimeSeconds: number;
           readonly type: 'error';
         },
   ): void {
     const sessionId = this.postedMessages[0]?.sessionId ?? 'probe-session';
     const message = parseWorkerToMainMessage({
-      version: 1,
+      version: PHYSICS_PROTOCOL_VERSION,
       sessionId,
       sequence: this.#nextResponseSequence,
       ...payload,
@@ -307,6 +404,7 @@ describe('PhysicsWorkerController', () => {
     await expect(controller.pause()).rejects.toThrow('尚未初始化');
     await expect(controller.step(1)).rejects.toThrow('尚未初始化');
     await expect(controller.setTimeScale(2)).rejects.toThrow('尚未初始化');
+    await expect(controller.replaceBodies([testBody], 0, 0)).rejects.toThrow('尚未初始化');
     await expect(controller.dispose()).rejects.toThrow('尚未初始化');
 
     expect(worker.postedMessages).toHaveLength(0);
@@ -361,6 +459,179 @@ describe('PhysicsWorkerController', () => {
     expect(receivedTimeScales).toEqual([500, 1_000, 2_000]);
 
     unsubscribe();
+    controller.close();
+  });
+
+  it('replaceBodies 会先暂停，再按当前修订原子提交完整天体列表', async () => {
+    const worker = new FakePhysicsWorker('success');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+    await controller.start();
+    const nextBodies = [
+      testBody,
+      {
+        ...testBody,
+        id: 'planet',
+        positionMeters: { x: 1, y: 0, z: 0 },
+      },
+    ];
+
+    const replaced = await controller.replaceBodies(nextBodies, 0, 0);
+
+    expect(worker.postedMessages.map((message) => message.type)).toEqual([
+      'initialize',
+      'start',
+      'pause',
+      'replaceBodies',
+    ]);
+    expect(worker.postedMessages.at(-1)).toMatchObject({
+      type: 'replaceBodies',
+      expectedBodyRevision: 0,
+      expectedSimulationTimeSeconds: 0,
+    });
+    expect(replaced).toMatchObject({
+      type: 'bodiesReplaced',
+      bodyRevision: 1,
+      bodies: nextBodies,
+    });
+    expect(controller.bodyRevision).toBe(1);
+    controller.close();
+  });
+
+  it('并发旧草稿会串行提交并拒绝过期修订', async () => {
+    const worker = new FakePhysicsWorker('success');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+    const firstBodies = [{ ...testBody, id: 'first' }];
+    const secondBodies = [{ ...testBody, id: 'second' }];
+
+    const first = controller.replaceBodies(firstBodies, 0, 0);
+    const stale = controller.replaceBodies(secondBodies, 0, 0);
+
+    await expect(first).resolves.toMatchObject({ bodyRevision: 1 });
+    await expect(stale).rejects.toThrow('bodyRevisionConflict');
+    await expect(controller.replaceBodies(secondBodies, 1, 0)).resolves.toMatchObject({
+      bodyRevision: 2,
+    });
+
+    const replaceCommands = worker.postedMessages.filter(
+      (message): message is Extract<MainToWorkerMessage, { type: 'replaceBodies' }> =>
+        message.type === 'replaceBodies',
+    );
+    expect(replaceCommands.map((message) => message.expectedBodyRevision)).toEqual([0, 0, 1]);
+    expect(controller.bodyRevision).toBe(2);
+    controller.close();
+  });
+
+  it('提交时固定天体快照，调用方后续修改不会改变发送内容', async () => {
+    const worker = new FakePhysicsWorker('success');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+    const submittedPlanet = {
+      ...testBody,
+      id: 'planet',
+      positionMeters: { x: 1, y: 2, z: 3 },
+    };
+    const submittedBodies = [submittedPlanet];
+
+    const replacement = controller.replaceBodies(submittedBodies, 0, 0);
+    submittedPlanet.positionMeters.x = 999;
+    submittedBodies.push({ ...testBody, id: 'late-body' });
+
+    await expect(replacement).resolves.toMatchObject({ bodyRevision: 1 });
+    expect(worker.postedMessages.at(-1)).toMatchObject({
+      type: 'replaceBodies',
+      bodies: [
+        expect.objectContaining({
+          id: 'planet',
+          positionMeters: { x: 1, y: 2, z: 3 },
+        }),
+      ],
+    });
+    controller.close();
+  });
+
+  it('可恢复替换错误只拒绝替换请求，并发倍率请求仍由真实 status 完成', async () => {
+    const worker = new FakePhysicsWorker('manualReplacementError');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+
+    const timeScale = controller.setTimeScale(2_000);
+    const replacement = controller.replaceBodies([{ ...testBody, id: 'planet' }], 0, 0);
+    await vi.waitFor(() => {
+      expect(worker.postedMessages.at(-1)?.type).toBe('replaceBodies');
+    });
+    worker.sendReplacementError();
+    worker.sendStatus(2_000);
+
+    await expect(replacement).rejects.toThrow('bodyReplacementFailed');
+    await expect(timeScale).resolves.toBeUndefined();
+    expect(worker.terminated).toBe(false);
+    controller.close();
+  });
+
+  it('无法关联的可恢复错误不会拒绝普通待决请求', async () => {
+    const worker = new FakePhysicsWorker('manualStatus');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+
+    const timeScale = controller.setTimeScale(2_000);
+    worker.sendUncorrelatedError();
+    worker.sendStatus(2_000);
+
+    await expect(timeScale).resolves.toBeUndefined();
+    expect(worker.terminated).toBe(false);
+    controller.close();
+  });
+
+  it('暂停后时间已推进时拒绝过期快照，并允许按最新时间重试', async () => {
+    const worker = new FakePhysicsWorker('success');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+    await controller.step(10);
+
+    await expect(controller.replaceBodies([{ ...testBody, id: 'stale' }], 0, 0)).rejects.toThrow(
+      'bodySnapshotConflict',
+    );
+    expect(controller.bodyRevision).toBe(0);
+    await expect(
+      controller.replaceBodies([{ ...testBody, id: 'current' }], 0, 10),
+    ).resolves.toMatchObject({ bodyRevision: 1, simulationTimeSeconds: 10 });
+    controller.close();
+  });
+
+  it('可恢复替换失败会拒绝当前操作并保留 controller', async () => {
+    const worker = new FakePhysicsWorker('replacementError');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'replacement-session',
+    });
+    await controller.initialize([testBody]);
+
+    await expect(controller.replaceBodies([{ ...testBody, id: 'planet' }], 0, 0)).rejects.toThrow(
+      'bodyReplacementFailed',
+    );
+    expect(worker.terminated).toBe(false);
+    expect(controller.bodyRevision).toBe(0);
+    await expect(controller.start()).resolves.toBeUndefined();
     controller.close();
   });
 });

@@ -1,6 +1,6 @@
 import { z } from 'zod';
 
-export const PHYSICS_PROTOCOL_VERSION = 1 as const;
+export const PHYSICS_PROTOCOL_VERSION = 2 as const;
 export const MAX_MAJOR_BODY_COUNT = 512 as const;
 export const MAX_TIME_SCALE = 5_400_000 as const;
 
@@ -8,6 +8,10 @@ const finiteNumberSchema = z.number();
 const nonNegativeFiniteNumberSchema = finiteNumberSchema.nonnegative();
 const positiveFiniteNumberSchema = finiteNumberSchema.positive();
 const timeScaleSchema = positiveFiniteNumberSchema.max(MAX_TIME_SCALE);
+export const bodyRevisionSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+const positiveBodyRevisionSchema = bodyRevisionSchema.positive();
+export const messageSequenceSchema = z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER);
+export const simulationTimeSecondsSchema = nonNegativeFiniteNumberSchema;
 
 export const sessionIdSchema = z
   .string()
@@ -81,8 +85,8 @@ export const physicsDiagnosticsSchema = z.strictObject({
 export const messageEnvelopeSchema = z.strictObject({
   version: z.literal(PHYSICS_PROTOCOL_VERSION),
   sessionId: sessionIdSchema,
-  sequence: z.number().int().nonnegative().max(Number.MAX_SAFE_INTEGER),
-  simulationTimeSeconds: nonNegativeFiniteNumberSchema,
+  sequence: messageSequenceSchema,
+  simulationTimeSeconds: simulationTimeSecondsSchema,
 });
 
 const initializeCommandSchema = messageEnvelopeSchema.extend({
@@ -110,6 +114,13 @@ const setTimeScaleCommandSchema = messageEnvelopeSchema.extend({
   timeScale: timeScaleSchema,
 });
 
+const replaceBodiesCommandSchema = messageEnvelopeSchema.extend({
+  type: z.literal('replaceBodies'),
+  expectedBodyRevision: bodyRevisionSchema,
+  expectedSimulationTimeSeconds: simulationTimeSecondsSchema,
+  bodies: bodyStatesSchema,
+});
+
 const disposeCommandSchema = messageEnvelopeSchema.extend({
   type: z.literal('dispose'),
 });
@@ -120,6 +131,7 @@ export const mainToWorkerMessageSchema = z.discriminatedUnion('type', [
   pauseCommandSchema,
   stepCommandSchema,
   setTimeScaleCommandSchema,
+  replaceBodiesCommandSchema,
   disposeCommandSchema,
 ]);
 
@@ -127,10 +139,19 @@ const readyResponseSchema = messageEnvelopeSchema.extend({
   type: z.literal('ready'),
   sequence: z.literal(0),
   simulationTimeSeconds: z.literal(0),
+  bodyRevision: z.literal(0),
 });
 
 const stateResponseSchema = messageEnvelopeSchema.extend({
   type: z.literal('state'),
+  bodyRevision: bodyRevisionSchema,
+  bodies: bodyStatesSchema,
+  diagnostics: physicsDiagnosticsSchema,
+});
+
+const bodiesReplacedResponseSchema = messageEnvelopeSchema.extend({
+  type: z.literal('bodiesReplaced'),
+  bodyRevision: positiveBodyRevisionSchema,
   bodies: bodyStatesSchema,
   diagnostics: physicsDiagnosticsSchema,
 });
@@ -147,11 +168,15 @@ const errorResponseSchema = messageEnvelopeSchema.extend({
     'invalidCommand',
     'invalidState',
     'initializationFailed',
+    'bodyRevisionConflict',
+    'bodySnapshotConflict',
+    'bodyReplacementFailed',
     'integrationFailed',
     'internalError',
   ]),
   message: z.string().min(1).max(1_024),
   recoverable: z.boolean(),
+  requestSequence: messageSequenceSchema.nullable(),
 });
 
 const disposedResponseSchema = messageEnvelopeSchema.extend({
@@ -161,6 +186,7 @@ const disposedResponseSchema = messageEnvelopeSchema.extend({
 export const workerToMainMessageSchema = z.discriminatedUnion('type', [
   readyResponseSchema,
   stateResponseSchema,
+  bodiesReplacedResponseSchema,
   statusResponseSchema,
   errorResponseSchema,
   disposedResponseSchema,

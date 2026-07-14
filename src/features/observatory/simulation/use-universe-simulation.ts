@@ -1,11 +1,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { PhysicsWorkerController } from '../../../physics/controller/physics-worker-controller';
-import type {
-  BodyState,
-  PhysicsDiagnostics,
-  WorkerToMainMessage,
-} from '../../../physics/protocol/schemas';
+import type { BodyState, PhysicsDiagnostics } from '../../../physics/protocol/schemas';
 import { createSolarSystemScenario } from '../../../physics/scenarios/solar-system';
 import {
   applyControllerFatalError,
@@ -15,6 +11,7 @@ import {
   type SimulationRunState,
   type UniverseSimulationState,
 } from './simulation-state';
+import { createSimulationMessageScheduler } from './simulation-message-scheduler';
 
 export const DEFAULT_OBSERVATORY_TIME_SCALE = 86_400;
 export const DEFAULT_OBSERVATORY_STEP_SECONDS = 3_600;
@@ -30,6 +27,8 @@ export interface UniverseSimulation {
   readonly bodies: readonly BodyState[];
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
+  readonly bodyRevision: number;
+  readonly bodySnapshotSimulationTimeSeconds: number;
   readonly simulationTimeSeconds: number;
   readonly timeScale: number;
   readonly error: Error | null;
@@ -40,6 +39,11 @@ export interface UniverseSimulation {
   readonly toggle: () => void;
   readonly step: (stepSeconds?: number) => void;
   readonly setTimeScale: (timeScale: number) => void;
+  readonly replaceBodies: (
+    bodies: readonly BodyState[],
+    expectedBodyRevision: number,
+    expectedSimulationTimeSeconds: number,
+  ) => void;
   readonly retry: () => void;
 }
 
@@ -129,39 +133,37 @@ export function useUniverseSimulation(): UniverseSimulation {
     const controller = new PhysicsWorkerController();
     controllerRef.current = controller;
     let active = true;
-    let animationFrame: number | null = null;
-    let latestStateMessage: Extract<WorkerToMainMessage, { type: 'state' }> | null = null;
-
-    const flushLatestState = () => {
-      animationFrame = null;
-      if (!active || generationRef.current !== generation || latestStateMessage === null) {
-        return;
-      }
-      const message = latestStateMessage;
-      latestStateMessage = null;
-      setSimulation((current) => applyWorkerMessage(current, message));
-    };
+    const messageScheduler = createSimulationMessageScheduler({
+      applyMessage: (message) => {
+        if (!active || generationRef.current !== generation) {
+          return;
+        }
+        setSimulation((current) => applyWorkerMessage(current, message));
+      },
+      cancelFrame: (frameId) => {
+        cancelAnimationFrame(frameId);
+      },
+      requestFrame: (callback) => requestAnimationFrame(callback),
+    });
 
     const unsubscribe = controller.subscribe((message) => {
       if (!active || generationRef.current !== generation) {
         return;
       }
       if (message.type === 'state') {
-        latestStateMessage = message;
         if (runStateRef.current !== 'running') {
           runStateRef.current = 'paused';
         }
-        animationFrame ??= requestAnimationFrame(flushLatestState);
-        return;
-      }
-      if (message.type === 'ready') {
+      } else if (message.type === 'ready') {
         runStateRef.current = 'initialized';
       } else if (message.type === 'status') {
         runStateRef.current = message.runState;
+      } else if (message.type === 'bodiesReplaced') {
+        runStateRef.current = 'paused';
       } else if (message.type === 'error') {
         runStateRef.current = 'paused';
       }
-      setSimulation((current) => applyWorkerMessage(current, message));
+      messageScheduler.accept(message);
     });
     const unsubscribeFatal = controller.subscribeFatal((error) => {
       if (!active || generationRef.current !== generation || controllerRef.current !== controller) {
@@ -203,10 +205,7 @@ export function useUniverseSimulation(): UniverseSimulation {
       if (generationRef.current === generation) {
         generationRef.current += 1;
       }
-      if (animationFrame !== null) {
-        cancelAnimationFrame(animationFrame);
-      }
-      latestStateMessage = null;
+      messageScheduler.dispose();
       unsubscribe();
       unsubscribeFatal();
       if (controllerRef.current === controller) {
@@ -249,6 +248,19 @@ export function useUniverseSimulation(): UniverseSimulation {
     [enqueueCommand],
   );
 
+  const replaceBodies = useCallback(
+    (
+      bodies: readonly BodyState[],
+      expectedBodyRevision: number,
+      expectedSimulationTimeSeconds: number,
+    ) => {
+      enqueueCommand((controller) =>
+        controller.replaceBodies(bodies, expectedBodyRevision, expectedSimulationTimeSeconds),
+      );
+    },
+    [enqueueCommand],
+  );
+
   const retry = useCallback(() => {
     generationRef.current += 1;
     const controller = controllerRef.current;
@@ -270,6 +282,7 @@ export function useUniverseSimulation(): UniverseSimulation {
     toggle,
     step,
     setTimeScale,
+    replaceBodies,
     retry,
   };
 }

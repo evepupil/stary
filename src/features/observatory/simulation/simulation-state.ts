@@ -13,7 +13,10 @@ export interface UniverseSimulationState {
   readonly bodies: readonly BodyState[];
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
+  readonly bodyRevision: number;
+  readonly bodySnapshotSimulationTimeSeconds: number;
   readonly simulationTimeSeconds: number;
+  readonly latestAppliedSequence: number;
   readonly latestStateSequence: number;
   readonly timeScale: number;
   readonly error: Error | null;
@@ -30,7 +33,10 @@ export function createInitialSimulationState(
     bodies,
     diagnostics: null,
     baselineDiagnostics: null,
+    bodyRevision: 0,
+    bodySnapshotSimulationTimeSeconds: 0,
     simulationTimeSeconds: 0,
+    latestAppliedSequence: 0,
     latestStateSequence: 0,
     timeScale,
     error: null,
@@ -61,19 +67,52 @@ export function applyWorkerMessage(
         ...state,
         phase: 'ready',
         runState: 'initialized',
+        bodyRevision: message.bodyRevision,
         simulationTimeSeconds: message.simulationTimeSeconds,
         error: null,
       };
     case 'state':
+      if (
+        message.bodyRevision < state.bodyRevision ||
+        message.sequence <= state.latestAppliedSequence
+      ) {
+        return state;
+      }
       return {
         ...state,
         phase: 'ready',
         runState: state.runState === 'running' ? 'running' : 'paused',
         bodies: message.bodies,
         diagnostics: message.diagnostics,
-        baselineDiagnostics: state.baselineDiagnostics ?? message.diagnostics,
+        baselineDiagnostics:
+          message.bodyRevision === state.bodyRevision
+            ? (state.baselineDiagnostics ?? message.diagnostics)
+            : message.diagnostics,
+        bodyRevision: message.bodyRevision,
+        bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
         simulationTimeSeconds: message.simulationTimeSeconds,
+        latestAppliedSequence: message.sequence,
         latestStateSequence: message.sequence,
+      };
+    case 'bodiesReplaced':
+      if (
+        message.bodyRevision <= state.bodyRevision ||
+        message.sequence <= state.latestAppliedSequence
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'ready',
+        runState: 'paused',
+        bodies: message.bodies,
+        diagnostics: message.diagnostics,
+        baselineDiagnostics: message.diagnostics,
+        bodyRevision: message.bodyRevision,
+        bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
+        simulationTimeSeconds: message.simulationTimeSeconds,
+        latestAppliedSequence: message.sequence,
+        error: null,
       };
     case 'status':
       return {

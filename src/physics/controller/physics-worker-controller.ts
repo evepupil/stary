@@ -1,6 +1,11 @@
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from '../protocol/parse-message';
 import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
-import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
+import {
+  bodyRevisionSchema,
+  bodyStatesSchema,
+  PHYSICS_PROTOCOL_VERSION,
+  simulationTimeSecondsSchema,
+} from '../protocol/schemas';
 import { SessionSequenceGate } from '../protocol/session-sequence-gate';
 import { createPhysicsWorker } from './create-physics-worker';
 
@@ -22,9 +27,22 @@ export interface PhysicsWorkerTarget {
 interface PendingResponse {
   readonly accept: (message: WorkerToMainMessage) => boolean;
   readonly reject: (error: Error) => void;
+  readonly requestSequence: number;
   readonly resolve: (message: WorkerToMainMessage) => void;
   readonly timeoutId: ReturnType<typeof setTimeout>;
 }
+
+type ControllerCommandPayload =
+  | { readonly bodies: BodyState[]; readonly type: 'initialize' }
+  | { readonly type: 'start' | 'pause' | 'dispose' }
+  | { readonly stepSeconds: number; readonly type: 'step' }
+  | { readonly timeScale: number; readonly type: 'setTimeScale' }
+  | {
+      readonly bodies: BodyState[];
+      readonly expectedBodyRevision: number;
+      readonly expectedSimulationTimeSeconds: number;
+      readonly type: 'replaceBodies';
+    };
 
 export interface PhysicsWorkerControllerOptions {
   readonly createWorker?: () => PhysicsWorkerTarget;
@@ -49,6 +67,8 @@ export class PhysicsWorkerController {
   readonly #sessionId: string;
   readonly #worker: PhysicsWorkerTarget;
   #closed = false;
+  #bodyReplacementQueue: Promise<void> = Promise.resolve();
+  #bodyRevision = 0;
   #initialized = false;
   #nextCommandSequence = 0;
   #simulationTimeSeconds = 0;
@@ -67,13 +87,15 @@ export class PhysicsWorkerController {
     return this.#simulationTimeSeconds;
   }
 
+  get bodyRevision(): number {
+    return this.#bodyRevision;
+  }
+
   initialize(bodies: readonly BodyState[]): Promise<void> {
     if (this.#initialized || this.#nextCommandSequence !== 0) {
       return Promise.reject(new Error('PhysicsWorkerController 已经初始化'));
     }
-    return this.#request('ready', () => {
-      this.#postCommand({ type: 'initialize', bodies: [...bodies] });
-    }).then(() => {
+    return this.#request('ready', { type: 'initialize', bodies: [...bodies] }).then(() => {
       this.#initialized = true;
     });
   }
@@ -85,9 +107,7 @@ export class PhysicsWorkerController {
     }
     return this.#request(
       'status',
-      () => {
-        this.#postCommand({ type: 'start' });
-      },
+      { type: 'start' },
       (message) => message.runState === 'running',
     ).then(() => undefined);
   }
@@ -99,9 +119,7 @@ export class PhysicsWorkerController {
     }
     return this.#request(
       'status',
-      () => {
-        this.#postCommand({ type: 'pause' });
-      },
+      { type: 'pause' },
       (message) => message.runState === 'paused',
     ).then(() => undefined);
   }
@@ -114,9 +132,7 @@ export class PhysicsWorkerController {
     const expectedTimeSeconds = this.#simulationTimeSeconds + stepSeconds;
     return this.#request(
       'state',
-      () => {
-        this.#postCommand({ type: 'step', stepSeconds });
-      },
+      { type: 'step', stepSeconds },
       (message) => message.simulationTimeSeconds >= expectedTimeSeconds,
     );
   }
@@ -128,11 +144,51 @@ export class PhysicsWorkerController {
     }
     return this.#request(
       'status',
-      () => {
-        this.#postCommand({ type: 'setTimeScale', timeScale });
-      },
+      { type: 'setTimeScale', timeScale },
       (message) => message.timeScale === timeScale,
     ).then(() => undefined);
+  }
+
+  replaceBodies(
+    bodies: readonly BodyState[],
+    expectedBodyRevision: number,
+    expectedSimulationTimeSeconds: number,
+  ): Promise<WorkerResponseOfType<'bodiesReplaced'>> {
+    const initializationError = this.#initializationError();
+    if (initializationError !== undefined) {
+      return Promise.reject(initializationError);
+    }
+    let submittedBodies: BodyState[];
+    let submittedBodyRevision: number;
+    let submittedSimulationTimeSeconds: number;
+    try {
+      submittedBodies = bodyStatesSchema.parse(bodies);
+      submittedBodyRevision = bodyRevisionSchema.parse(expectedBodyRevision);
+      submittedSimulationTimeSeconds = simulationTimeSecondsSchema.parse(
+        expectedSimulationTimeSeconds,
+      );
+    } catch (error) {
+      return Promise.reject(toError(error, '天体替换请求无效'));
+    }
+
+    const operation = this.#bodyReplacementQueue.then(async () => {
+      await this.pause();
+      return this.#request(
+        'bodiesReplaced',
+        {
+          type: 'replaceBodies',
+          expectedBodyRevision: submittedBodyRevision,
+          expectedSimulationTimeSeconds: submittedSimulationTimeSeconds,
+          bodies: submittedBodies,
+        },
+        (message) => message.bodyRevision === submittedBodyRevision + 1,
+      );
+    });
+    this.#bodyReplacementQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
   }
 
   dispose(): Promise<void> {
@@ -140,9 +196,7 @@ export class PhysicsWorkerController {
     if (initializationError !== undefined) {
       return Promise.reject(initializationError);
     }
-    return this.#request('disposed', () => {
-      this.#postCommand({ type: 'dispose' });
-    }).then(() => {
+    return this.#request('disposed', { type: 'dispose' }).then(() => {
       this.close();
     });
   }
@@ -177,11 +231,18 @@ export class PhysicsWorkerController {
 
   #request<Type extends WorkerToMainMessage['type']>(
     type: Type,
-    send: () => void,
+    payload: ControllerCommandPayload,
     matches: (message: WorkerResponseOfType<Type>) => boolean = () => true,
   ): Promise<WorkerResponseOfType<Type>> {
     if (this.#closed) {
       return Promise.reject(new Error('Physics Worker controller 已关闭'));
+    }
+
+    let command: MainToWorkerMessage;
+    try {
+      command = this.#createCommand(payload);
+    } catch (error) {
+      return Promise.reject(toError(error, 'Physics Worker 命令无效'));
     }
 
     return new Promise((resolve, reject) => {
@@ -195,6 +256,7 @@ export class PhysicsWorkerController {
         accept: (message) =>
           message.type === type && matches(message as WorkerResponseOfType<Type>),
         reject,
+        requestSequence: command.sequence,
         resolve: (message) => {
           resolve(message as WorkerResponseOfType<Type>);
         },
@@ -202,7 +264,7 @@ export class PhysicsWorkerController {
       };
       this.#pendingResponses.add(pending);
       try {
-        send();
+        this.#worker.postMessage(command);
       } catch (error) {
         this.#pendingResponses.delete(pending);
         clearTimeout(timeoutId);
@@ -211,13 +273,7 @@ export class PhysicsWorkerController {
     });
   }
 
-  #postCommand(
-    payload:
-      | { readonly bodies: BodyState[]; readonly type: 'initialize' }
-      | { readonly type: 'start' | 'pause' | 'dispose' }
-      | { readonly stepSeconds: number; readonly type: 'step' }
-      | { readonly timeScale: number; readonly type: 'setTimeScale' },
-  ): void {
+  #createCommand(payload: ControllerCommandPayload): MainToWorkerMessage {
     const message = parseMainToWorkerMessage({
       version: PHYSICS_PROTOCOL_VERSION,
       sessionId: this.#sessionId,
@@ -226,7 +282,7 @@ export class PhysicsWorkerController {
       ...payload,
     });
     this.#nextCommandSequence += 1;
-    this.#worker.postMessage(message);
+    return message;
   }
 
   #initializationError(): Error | undefined {
@@ -248,13 +304,30 @@ export class PhysicsWorkerController {
         );
       }
       this.#simulationTimeSeconds = message.simulationTimeSeconds;
+      if ('bodyRevision' in message) {
+        if (message.bodyRevision < this.#bodyRevision) {
+          throw new Error('Physics Worker 返回了倒退的天体修订号');
+        }
+        this.#bodyRevision = message.bodyRevision;
+      }
       this.#listeners.forEach((listener) => {
         listener(message);
       });
       if (message.type === 'error') {
         const error = new Error(`${message.code}: ${message.message}`);
         if (message.recoverable) {
-          this.#rejectPending(error);
+          if (message.requestSequence === null) {
+            return;
+          }
+          const pending = [...this.#pendingResponses].find(
+            (candidate) => candidate.requestSequence === message.requestSequence,
+          );
+          if (pending === undefined) {
+            throw new Error('Physics Worker 的可恢复错误指向未知请求');
+          }
+          this.#pendingResponses.delete(pending);
+          clearTimeout(pending.timeoutId);
+          pending.reject(error);
         } else {
           this.#fatal(error);
         }

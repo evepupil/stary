@@ -12,4 +12,7 @@ export interface PhysicsSimulation {
   snapshot(): PhysicsSnapshot;
 }
 
-export type CreatePhysicsSimulation = (bodies: readonly BodyState[]) => Promise<PhysicsSimulation>;
+export type CreatePhysicsSimulation = (
+  bodies: readonly BodyState[],
+  initialTimeSeconds: number,
+) => Promise<PhysicsSimulation>;
