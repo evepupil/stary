@@ -1,6 +1,8 @@
 node_modules/
 dist/
 coverage/
+playwright-report/
+test-results/
 *.tsbuildinfo
 
 # REBOUND source and build cache are reproducible inputs, not repository content.

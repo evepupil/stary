@@ -2,10 +2,12 @@ import { z } from 'zod';
 
 export const PHYSICS_PROTOCOL_VERSION = 1 as const;
 export const MAX_MAJOR_BODY_COUNT = 512 as const;
+export const MAX_TIME_SCALE = 5_400_000 as const;
 
 const finiteNumberSchema = z.number();
 const nonNegativeFiniteNumberSchema = finiteNumberSchema.nonnegative();
 const positiveFiniteNumberSchema = finiteNumberSchema.positive();
+const timeScaleSchema = positiveFiniteNumberSchema.max(MAX_TIME_SCALE);
 
 export const sessionIdSchema = z
   .string()
@@ -105,7 +107,7 @@ const stepCommandSchema = messageEnvelopeSchema.extend({
 
 const setTimeScaleCommandSchema = messageEnvelopeSchema.extend({
   type: z.literal('setTimeScale'),
-  timeScale: positiveFiniteNumberSchema,
+  timeScale: timeScaleSchema,
 });
 
 const disposeCommandSchema = messageEnvelopeSchema.extend({
@@ -136,7 +138,7 @@ const stateResponseSchema = messageEnvelopeSchema.extend({
 const statusResponseSchema = messageEnvelopeSchema.extend({
   type: z.literal('status'),
   runState: z.enum(['idle', 'initialized', 'running', 'paused']),
-  timeScale: positiveFiniteNumberSchema,
+  timeScale: timeScaleSchema,
 });
 
 const errorResponseSchema = messageEnvelopeSchema.extend({

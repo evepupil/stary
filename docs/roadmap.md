@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M0 实施中。REBOUND WebAssembly 交付、严格工程底座和正式 Worker 消息协议均已完成，进入 Task 4 双天体模拟。
+M0 实施中。正式 REBOUND 物理 Worker 已完成真实双天体轨道、时间控制和守恒验证，进入 Task 5 Three.js 场景与相机。
 
 ## Milestones
 
@@ -24,13 +24,14 @@ M0 实施中。REBOUND WebAssembly 交付、严格工程底座和正式 Worker �
 - M0 Task 1：已完成。固定构建、GPL 边界、一周期与 1000 周期验收、浏览器 Worker 和产物哈希门禁均有证据。
 - M0 Task 2：已完成。React/Vite/TypeScript strict、pnpm 锁文件、格式/lint/类型/单测/生产构建门禁和前端产物检查均已建立。
 - M0 Task 3：已完成。建立版本 1 双向消息、SI 天体状态、Zod 运行时校验和会话顺序门。
-- M0 Task 4：准备按正式协议交付 Worker 中的双天体模拟、时间控制和守恒指标。
+- M0 Task 4：已完成。正式 TypeScript 适配层在独立 module Worker 中运行固定 REBOUND 5.0.1 WASM，支持时间控制、安全清理、双天体轨道和守恒验证。
+- M0 Task 5：准备建立 Three.js 全屏场景、相机、时间控制界面和物理状态显示。
 
 ## Next Recommended Steps
 
-1. 执行 M0 Task 4，按正式协议交付双天体轨道、时间控制和守恒指标。
-2. 建立 Three.js 全屏场景、相机和时间控制。
-3. 完成生产构建和浏览器垂直切片验收。
+1. 执行 M0 Task 5，建立 Three.js 全屏场景、相机和时间控制。
+2. 把正式 Worker 状态接入渲染适配层和守恒指标显示。
+3. 完成浏览器垂直切片与 WebGPU/WebGL2 回退验收。
 
 ## Inbox
 
@@ -70,6 +71,7 @@ M0 实施中。REBOUND WebAssembly 交付、严格工程底座和正式 Worker �
 | 2026-07-14 | 接受 GPL-3.0-or-later 发布要求 | REBOUND 5.0.1 使用 GPL-3.0-or-later | 用户确认与可行性报告 |
 | 2026-07-14 | 固定 Emscripten 6.0.3 镜像摘要构建 REBOUND | 避免全局安装并保证构建输入可审计 | `docs/rebound-wasm-feasibility.md` |
 | 2026-07-14 | 正式物理协议固定为版本 1，使用 SI 字段、Zod 校验和新 session 重启门 | 隔离物理实现并阻止非法、乱序和旧 Worker 消息进入应用 | `docs/模块设计/物理核心.md` |
+| 2026-07-14 | 1x 固定为每现实秒推进 1 模拟秒，倍率上限为 5400000，单片最多推进 1 模拟天 | 超量时主动降低并回报实际倍率，不保留隐形积压，同时保持 IAS15 精度策略 | `docs/模块设计/物理核心.md` |
 
 ## Recent Progress
 
@@ -80,3 +82,4 @@ M0 实施中。REBOUND WebAssembly 交付、严格工程底座和正式 Worker �
 - 2026-07-14：完成 M0 Task 1 浏览器验收；一周期与 1000 周期指标通过，控制台无 warning/error，并建立固定产物哈希门禁。
 - 2026-07-14：完成 M0 Task 2 严格工程底座；建立可重复安装、格式/lint/类型/单测/生产构建门禁，并验证 Worker、WASM、WebGPU 和 WebGL2 构建产物。
 - 2026-07-14：完成 M0 Task 3 正式消息协议；建立版本、SI 数据、双向运行时解析、严格序号与 Worker 重启隔离测试。
+- 2026-07-14：完成 M0 Task 4 正式物理 Worker；固定 REBOUND 5.0.1 在产品 TypeScript 适配层中运行真实圆轨道、椭圆轨道、1000 周期守恒和倍率等价测试。

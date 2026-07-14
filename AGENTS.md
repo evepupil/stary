@@ -30,10 +30,10 @@
 - 干净安装命令为 `pnpm install --frozen-lockfile`。
 - 格式检查命令为 `pnpm format:check`，修复当前工程文件格式使用 `pnpm format`。
 - 静态检查命令为 `pnpm lint`，严格类型检查命令为 `pnpm typecheck`。
-- 单元测试命令为 `pnpm test`，生产构建命令为 `pnpm build`。
-- 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测和生产构建。
-- `pnpm build` 会检查生产包不含 source map，验证模块 Worker 与 WebGPU/WebGL 渲染模块均已产出，并按 `artifact-lock.json` 的固定路径、字节数和 SHA-256 校验原型及发布 REBOUND WASM。
-- 临时工程页会运行浏览器探针：WebGPU 必须取得适配器且导入模块，否则回退 WebGL2；Worker 检查 ready、错误和超时；WASM 检查请求、`application/wasm` MIME 与 `WebAssembly.compileStreaming`。
+- 单元与物理集成测试命令为 `pnpm test`；它会直接运行固定 REBOUND WASM 的圆轨道、椭圆轨道和 1000 周期守恒测试。生产构建命令为 `pnpm build`。
+- 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测、生产构建和 Playwright 浏览器验收。首次在新环境运行前使用 `pnpm test:e2e:install` 安装 Chrome。
+- `pnpm build` 会检查生产包不含 source map，验证正式 physics Worker 与 WebGPU/WebGL 渲染模块均已产出，并按 `artifact-lock.json` 校验 REBOUND 胶水源文件、原始 WASM 和发布 WASM。
+- 临时工程页会运行浏览器探针：WebGPU 必须取得适配器且导入模块，否则回退 WebGL2；正式 physics Worker 会真实完成太阳地球 initialize、ready、start、pause、单步 state 和 dispose；WASM 另行检查请求、`application/wasm` MIME 与 `WebAssembly.compileStreaming`。
 - REBOUND/WASM 隔离原型使用固定 Docker 镜像构建，命令为 `spikes/rebound-wasm/scripts/build.ps1`。
 - 原型测试命令为 `node --test spikes/rebound-wasm/tests/*.test.mjs`，数值报告命令为 `node spikes/rebound-wasm/scripts/run-acceptance.mjs`。
 - 原型完整门禁为 `powershell -NoProfile -ExecutionPolicy Bypass -File spikes/rebound-wasm/scripts/verify.ps1`，包含固定构建、测试、数值验收和产物哈希校验。

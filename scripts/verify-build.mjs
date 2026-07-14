@@ -8,6 +8,7 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const distDirectory = path.join(projectRoot, 'dist');
 const reboundSpikeDirectory = path.join(projectRoot, 'spikes', 'rebound-wasm');
 const artifactLockPath = path.join(reboundSpikeDirectory, 'artifact-lock.json');
+const lockedGluePath = 'dist/rebound.mjs';
 const lockedWasmPath = 'dist/rebound.wasm';
 const manifestWasmSource = `spikes/rebound-wasm/${lockedWasmPath}`;
 
@@ -27,22 +28,22 @@ function sha256(content) {
   return createHash('sha256').update(content).digest('hex').toUpperCase();
 }
 
-function readLockedWasmArtifact(artifactLock) {
+function readLockedArtifact(artifactLock, artifactPath) {
   if (!Array.isArray(artifactLock?.artifacts)) {
     throw new Error('artifact-lock.json 缺少 artifacts 数组');
   }
 
-  const matches = artifactLock.artifacts.filter((artifact) => artifact?.path === lockedWasmPath);
+  const matches = artifactLock.artifacts.filter((artifact) => artifact?.path === artifactPath);
   if (matches.length !== 1) {
-    throw new Error(`artifact-lock.json 应恰好锁定一个 ${lockedWasmPath}`);
+    throw new Error(`artifact-lock.json 应恰好锁定一个 ${artifactPath}`);
   }
 
   const artifact = matches[0];
   if (!Number.isSafeInteger(artifact.bytes) || artifact.bytes <= 0) {
-    throw new Error(`${lockedWasmPath} 的锁定字节数无效`);
+    throw new Error(`${artifactPath} 的锁定字节数无效`);
   }
   if (typeof artifact.sha256 !== 'string' || !/^[A-F0-9]{64}$/.test(artifact.sha256)) {
-    throw new Error(`${lockedWasmPath} 的锁定 SHA-256 无效`);
+    throw new Error(`${artifactPath} 的锁定 SHA-256 无效`);
   }
 
   return artifact;
@@ -60,7 +61,8 @@ function assertLockedWasm(label, content, lockedArtifact) {
 }
 
 const artifactLock = JSON.parse(await readFile(artifactLockPath, 'utf8'));
-const lockedWasmArtifact = readLockedWasmArtifact(artifactLock);
+const lockedGlueArtifact = readLockedArtifact(artifactLock, lockedGluePath);
+const lockedWasmArtifact = readLockedArtifact(artifactLock, lockedWasmPath);
 const files = await listFiles(distDirectory);
 const relativeFiles = files.map((file) => path.relative(distDirectory, file).replaceAll('\\', '/'));
 
@@ -70,10 +72,13 @@ if (sourceMaps.length > 0) {
 }
 
 const workerFiles = relativeFiles.filter(
-  (file) => file.includes('foundation.worker') && file.endsWith('.js'),
+  (file) => file.includes('physics.worker') && file.endsWith('.js'),
 );
 if (workerFiles.length !== 1) {
-  throw new Error(`应产出一个模块 Worker，实际为 ${workerFiles.length} 个`);
+  throw new Error(`应产出一个正式物理模块 Worker，实际为 ${workerFiles.length} 个`);
+}
+if (relativeFiles.some((file) => file.includes('foundation.worker'))) {
+  throw new Error('生产构建仍包含旧 foundation Worker');
 }
 
 const wasmFiles = relativeFiles.filter((file) => file.endsWith('.wasm'));
@@ -90,10 +95,17 @@ if (manifestWasmEntry?.src !== manifestWasmSource || manifestWasmEntry.file !== 
 }
 
 const sourceWasmPath = path.join(reboundSpikeDirectory, ...lockedWasmPath.split('/'));
+const sourceGluePath = path.join(reboundSpikeDirectory, ...lockedGluePath.split('/'));
+const sourceGlue = await readFile(sourceGluePath);
 const sourceWasm = await readFile(sourceWasmPath);
 const builtWasm = await readFile(path.join(distDirectory, wasmFiles[0]));
+const builtWorker = await readFile(path.join(distDirectory, workerFiles[0]), 'utf8');
+assertLockedWasm('正式层使用的 REBOUND 胶水模块', sourceGlue, lockedGlueArtifact);
 assertLockedWasm('原型 REBOUND WASM', sourceWasm, lockedWasmArtifact);
 assertLockedWasm('生产 REBOUND WASM', builtWasm, lockedWasmArtifact);
+if (!builtWorker.includes('_stary_reb_create') || !builtWorker.includes('_stary_reb_integrate')) {
+  throw new Error('正式物理 Worker 没有包含锁定 REBOUND 胶水模块的关键导出');
+}
 
 const dynamicImports = manifest['index.html']?.dynamicImports;
 if (!Array.isArray(dynamicImports)) {

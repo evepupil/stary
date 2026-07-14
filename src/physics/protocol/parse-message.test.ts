@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from './parse-message';
-import { MAX_MAJOR_BODY_COUNT } from './schemas';
+import { MAX_MAJOR_BODY_COUNT, MAX_TIME_SCALE } from './schemas';
 
 const envelope = {
   version: 1,
@@ -122,6 +122,39 @@ describe('parseMainToWorkerMessage', () => {
       parseMainToWorkerMessage({ ...envelope, type: 'setTimeScale', timeScale: 0 }),
     ).toThrow();
     expect(() => parseMainToWorkerMessage({ ...envelope, sequence: 0.5, type: 'pause' })).toThrow();
+  });
+
+  it('接受最大时间倍率并拒绝超过协议上限的命令和状态', () => {
+    expect(() =>
+      parseMainToWorkerMessage({
+        ...envelope,
+        type: 'setTimeScale',
+        timeScale: MAX_TIME_SCALE,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      parseWorkerToMainMessage({
+        ...envelope,
+        type: 'status',
+        runState: 'running',
+        timeScale: MAX_TIME_SCALE,
+      }),
+    ).not.toThrow();
+    expect(() =>
+      parseMainToWorkerMessage({
+        ...envelope,
+        type: 'setTimeScale',
+        timeScale: MAX_TIME_SCALE + 1,
+      }),
+    ).toThrow();
+    expect(() =>
+      parseWorkerToMainMessage({
+        ...envelope,
+        type: 'status',
+        runState: 'running',
+        timeScale: MAX_TIME_SCALE + 1,
+      }),
+    ).toThrow();
   });
 
   it('拒绝重复天体 id', () => {

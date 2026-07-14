@@ -5,10 +5,10 @@ import {
   describeUnknownError,
   type ProbeState,
 } from '../platform/probes/probe-state';
+import { probePhysicsWorker } from '../physics/controller/probe-physics-worker';
 import { probeRenderingPath } from '../platform/rendering/probe-rendering';
 import { REBOUND_WASM_URL } from '../platform/wasm/rebound-asset';
 import { probeReboundWasm } from '../platform/wasm/probe-rebound-wasm';
-import { probeFoundationWorker } from '../platform/worker/probe-foundation-worker';
 
 export interface FoundationProbeStates {
   readonly renderer: ProbeState;
@@ -20,7 +20,7 @@ function createLoadingStates(): FoundationProbeStates {
   return {
     renderer: createProbeState('loading', '检查适配器、上下文与模块导入'),
     wasm: createProbeState('loading', '检查请求、MIME 与流式编译'),
-    worker: createProbeState('loading', '等待模块 Worker ready'),
+    worker: createProbeState('loading', '初始化双天体，依次启动、暂停、单步并安全销毁'),
   };
 }
 
@@ -59,9 +59,15 @@ export function useFoundationProbes(): FoundationProbeStates {
         fail('wasm', error);
       });
 
-    void probeFoundationWorker({ signal: controller.signal })
-      .then(() => {
-        update('worker', createProbeState('ready', '模块 Worker ready 探针通过'));
+    void probePhysicsWorker({ signal: controller.signal })
+      .then(({ bodyCount, simulationTimeSeconds, stepSeconds }) => {
+        update(
+          'worker',
+          createProbeState(
+            'ready',
+            `正式物理 Worker 已依次完成启动、暂停、单步推进 ${String(stepSeconds)} 秒；当前模拟时间 ${String(simulationTimeSeconds)} 秒，返回 ${String(bodyCount)} 个天体`,
+          ),
+        );
       })
       .catch((error: unknown) => {
         fail('worker', error);
