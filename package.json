@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\" \"docs/模块设计/物理核心.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\" \"docs/模块设计/物理核心.md\"",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"scripts/**/*.mjs\" \"vite.config.ts\" \"eslint.config.js\" --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
@@ -21,7 +21,8 @@
   "dependencies": {
     "react": "19.2.7",
     "react-dom": "19.2.7",
-    "three": "0.185.1"
+    "three": "0.185.1",
+    "zod": "4.4.3"
   },
   "devDependencies": {
     "@eslint/js": "10.0.1",

@@ -26,6 +26,7 @@
 - 语言与运行时：Node.js `22.14.0`；TypeScript `6.0.3`，应用与构建配置均开启 `strict`。
 - 包管理与构建工具：pnpm `10.21.0`、Vite `8.1.4`、React `19.2.7`、Three.js `0.185.1`。
 - 测试与代码质量：Vitest `4.1.10`、ESLint `10.7.0`、Prettier `3.9.5`。
+- 运行时结构校验：Zod `4.4.3`；跨线程未知输入必须先解析，再进入业务逻辑。
 - 干净安装命令为 `pnpm install --frozen-lockfile`。
 - 格式检查命令为 `pnpm format:check`，修复当前工程文件格式使用 `pnpm format`。
 - 静态检查命令为 `pnpm lint`，严格类型检查命令为 `pnpm typecheck`。

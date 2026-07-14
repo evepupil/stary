@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M0 实施中。Task 1 的 REBOUND WebAssembly 交付路径和 Task 2 的严格工程底座均已完成，进入 Task 3 正式 Worker 消息协议。
+M0 实施中。REBOUND WebAssembly 交付、严格工程底座和正式 Worker 消息协议均已完成，进入 Task 4 双天体模拟。
 
 ## Milestones
 
@@ -23,13 +23,14 @@ M0 实施中。Task 1 的 REBOUND WebAssembly 交付路径和 Task 2 的严格�
 
 - M0 Task 1：已完成。固定构建、GPL 边界、一周期与 1000 周期验收、浏览器 Worker 和产物哈希门禁均有证据。
 - M0 Task 2：已完成。React/Vite/TypeScript strict、pnpm 锁文件、格式/lint/类型/单测/生产构建门禁和前端产物检查均已建立。
-- M0 Task 3：准备建立带版本、单位和运行时校验的正式 Worker 消息协议。
+- M0 Task 3：已完成。建立版本 1 双向消息、SI 天体状态、Zod 运行时校验和会话顺序门。
+- M0 Task 4：准备按正式协议交付 Worker 中的双天体模拟、时间控制和守恒指标。
 
 ## Next Recommended Steps
 
-1. 执行 M0 Task 3，建立带版本、单位和运行时校验的正式 Worker 消息协议。
-2. 按正式消息协议交付双天体轨道切片。
-3. 建立 Three.js 全屏场景、相机和时间控制。
+1. 执行 M0 Task 4，按正式协议交付双天体轨道、时间控制和守恒指标。
+2. 建立 Three.js 全屏场景、相机和时间控制。
+3. 完成生产构建和浏览器垂直切片验收。
 
 ## Inbox
 
@@ -68,6 +69,7 @@ M0 实施中。Task 1 的 REBOUND WebAssembly 交付路径和 Task 2 的严格�
 | 2026-07-14 | 存档本地优先，首版不引入账号和后端 | 控制首版范围并支持文件分享 | 设计规格 |
 | 2026-07-14 | 接受 GPL-3.0-or-later 发布要求 | REBOUND 5.0.1 使用 GPL-3.0-or-later | 用户确认与可行性报告 |
 | 2026-07-14 | 固定 Emscripten 6.0.3 镜像摘要构建 REBOUND | 避免全局安装并保证构建输入可审计 | `docs/rebound-wasm-feasibility.md` |
+| 2026-07-14 | 正式物理协议固定为版本 1，使用 SI 字段、Zod 校验和新 session 重启门 | 隔离物理实现并阻止非法、乱序和旧 Worker 消息进入应用 | `docs/模块设计/物理核心.md` |
 
 ## Recent Progress
 
@@ -77,3 +79,4 @@ M0 实施中。Task 1 的 REBOUND WebAssembly 交付路径和 Task 2 的严格�
 - 2026-07-14：完成 M0 Task 1 的 REBOUND/WASM 固定构建、Node 轨道验收、许可记录和静态 Worker 验收页。
 - 2026-07-14：完成 M0 Task 1 浏览器验收；一周期与 1000 周期指标通过，控制台无 warning/error，并建立固定产物哈希门禁。
 - 2026-07-14：完成 M0 Task 2 严格工程底座；建立可重复安装、格式/lint/类型/单测/生产构建门禁，并验证 Worker、WASM、WebGPU 和 WebGL2 构建产物。
+- 2026-07-14：完成 M0 Task 3 正式消息协议；建立版本、SI 数据、双向运行时解析、严格序号与 Worker 重启隔离测试。
