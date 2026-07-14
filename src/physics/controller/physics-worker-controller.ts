@@ -41,6 +41,7 @@ function toError(error: unknown, fallback: string): Error {
 }
 
 export class PhysicsWorkerController {
+  readonly #fatalListeners = new Set<(error: Error) => void>();
   readonly #inboundGate: SessionSequenceGate;
   readonly #listeners = new Set<(message: WorkerToMainMessage) => void>();
   readonly #operationTimeoutMs: number;
@@ -153,6 +154,13 @@ export class PhysicsWorkerController {
     };
   }
 
+  subscribeFatal(listener: (error: Error) => void): () => void {
+    this.#fatalListeners.add(listener);
+    return () => {
+      this.#fatalListeners.delete(listener);
+    };
+  }
+
   close(reason = new Error('Physics Worker controller 已关闭')): void {
     if (this.#closed) {
       return;
@@ -164,6 +172,7 @@ export class PhysicsWorkerController {
     this.#worker.terminate();
     this.#rejectPending(reason);
     this.#listeners.clear();
+    this.#fatalListeners.clear();
   }
 
   #request<Type extends WorkerToMainMessage['type']>(
@@ -272,6 +281,16 @@ export class PhysicsWorkerController {
   };
 
   #fatal(error: Error): void {
+    if (this.#closed) {
+      return;
+    }
+    this.#fatalListeners.forEach((listener) => {
+      try {
+        listener(error);
+      } catch {
+        // A subscriber failure must not interrupt fatal controller cleanup.
+      }
+    });
     this.close(error);
   }
 

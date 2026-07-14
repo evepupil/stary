@@ -10,7 +10,6 @@ const reboundSpikeDirectory = path.join(projectRoot, 'spikes', 'rebound-wasm');
 const artifactLockPath = path.join(reboundSpikeDirectory, 'artifact-lock.json');
 const lockedGluePath = 'dist/rebound.mjs';
 const lockedWasmPath = 'dist/rebound.wasm';
-const manifestWasmSource = `spikes/rebound-wasm/${lockedWasmPath}`;
 
 async function listFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -89,11 +88,6 @@ if (wasmFiles.length !== 1) {
 const manifest = JSON.parse(
   await readFile(path.join(distDirectory, '.vite', 'manifest.json'), 'utf8'),
 );
-const manifestWasmEntry = manifest[manifestWasmSource];
-if (manifestWasmEntry?.src !== manifestWasmSource || manifestWasmEntry.file !== wasmFiles[0]) {
-  throw new Error(`生产构建清单没有把 ${manifestWasmSource} 映射到唯一 WASM 产物`);
-}
-
 const sourceWasmPath = path.join(reboundSpikeDirectory, ...lockedWasmPath.split('/'));
 const sourceGluePath = path.join(reboundSpikeDirectory, ...lockedGluePath.split('/'));
 const sourceGlue = await readFile(sourceGluePath);
@@ -106,6 +100,10 @@ assertLockedWasm('生产 REBOUND WASM', builtWasm, lockedWasmArtifact);
 if (!builtWorker.includes('_stary_reb_create') || !builtWorker.includes('_stary_reb_integrate')) {
   throw new Error('正式物理 Worker 没有包含锁定 REBOUND 胶水模块的关键导出');
 }
+const builtWasmFileName = path.posix.basename(wasmFiles[0]);
+if (!builtWorker.includes(builtWasmFileName)) {
+  throw new Error(`正式物理 Worker 没有引用唯一 REBOUND WASM 产物 ${builtWasmFileName}`);
+}
 
 const dynamicImports = manifest['index.html']?.dynamicImports;
 if (!Array.isArray(dynamicImports)) {
@@ -116,6 +114,9 @@ if (!dynamicImports.some((modulePath) => modulePath.endsWith('/three.webgpu.js')
 }
 if (!dynamicImports.some((modulePath) => modulePath.endsWith('/three.module.js'))) {
   throw new Error('生产构建清单缺少 Three.js WebGL 渲染模块');
+}
+if (!dynamicImports.some((modulePath) => modulePath.endsWith('/observatory-scene.ts'))) {
+  throw new Error('生产构建清单缺少按需加载的观测场景模块');
 }
 
 const sizes = await Promise.all(

@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseWorkerToMainMessage } from '../protocol/parse-message';
-import type { MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
+import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
 import { PhysicsWorkerController, type PhysicsWorkerTarget } from './physics-worker-controller';
 import { PHYSICS_PROBE_STEP_SECONDS, probePhysicsWorker } from './probe-physics-worker';
 
@@ -14,6 +14,14 @@ const diagnostics = {
   totalLinearMomentumKgMetersPerSecond: { x: 0, y: 0, z: 0 },
   totalAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
 } as const;
+
+const testBody: BodyState = {
+  id: 'body',
+  massKg: 1,
+  radiusMeters: 0,
+  positionMeters: { x: 0, y: 0, z: 0 },
+  velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
+};
 
 class FakePhysicsWorker implements PhysicsWorkerTarget {
   readonly listeners = new Map<WorkerControllerEventType, Set<EventListener>>();
@@ -242,6 +250,52 @@ describe('probePhysicsWorker', () => {
 });
 
 describe('PhysicsWorkerController', () => {
+  it.each([
+    ['error', '运行错误'],
+    ['messageerror', '无法反序列化'],
+  ] as const)('原生 %s 会先通知 fatal 订阅，再关闭控制器', async (mode, message) => {
+    const worker = new FakePhysicsWorker(mode);
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'probe-session',
+    });
+    const fatalErrors: Error[] = [];
+    controller.subscribeFatal((error) => {
+      expect(worker.terminated).toBe(false);
+      fatalErrors.push(error);
+    });
+
+    await expect(controller.initialize([testBody])).rejects.toThrow(message);
+
+    expect(fatalErrors).toHaveLength(1);
+    expect(fatalErrors[0]?.message).toContain(message);
+    expect(worker.terminated).toBe(true);
+    expect(worker.listenerCount()).toBe(0);
+  });
+
+  it('fatal 订阅抛错不会阻断后续通知和待决命令清理', async () => {
+    const worker = new FakePhysicsWorker('error');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'probe-session',
+    });
+    const survivingListener = vi.fn();
+    controller.subscribeFatal(() => {
+      throw new Error('订阅者自身错误');
+    });
+    controller.subscribeFatal(survivingListener);
+
+    const pendingInitialization = controller.initialize([testBody]);
+
+    await expect(pendingInitialization).rejects.toThrow('运行错误');
+    expect(survivingListener).toHaveBeenCalledOnce();
+    expect(survivingListener.mock.calls[0]?.[0]).toMatchObject({
+      message: 'Physics Worker 运行错误',
+    });
+    expect(worker.terminated).toBe(true);
+    expect(worker.listenerCount()).toBe(0);
+  });
+
   it('initialize 完成前所有运行命令立即拒绝且不会发给 Worker', async () => {
     const worker = new FakePhysicsWorker('silent');
     const controller = new PhysicsWorkerController({

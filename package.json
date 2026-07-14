@@ -10,8 +10,8 @@
   },
   "scripts": {
     "dev": "vite",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\" \"docs/模块设计/物理核心.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/工程底座.md\" \"docs/模块设计/物理核心.md\"",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
     "lint": "eslint \"src/**/*.{ts,tsx}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
@@ -21,6 +21,7 @@
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && playwright test"
   },
   "dependencies": {
+    "lucide-react": "1.24.0",
     "react": "19.2.7",
     "react-dom": "19.2.7",
     "three": "0.185.1",
@@ -30,6 +31,7 @@
     "@eslint/js": "10.0.1",
     "@playwright/test": "1.61.1",
     "@types/node": "22.20.1",
+    "@types/pngjs": "6.0.5",
     "@types/react": "19.2.17",
     "@types/react-dom": "19.2.3",
     "@types/three": "0.185.1",
@@ -38,6 +40,7 @@
     "eslint-plugin-react-hooks": "7.1.1",
     "eslint-plugin-react-refresh": "0.5.3",
     "globals": "17.7.0",
+    "pngjs": "7.0.0",
     "prettier": "3.9.5",
     "typescript": "6.0.3",
     "typescript-eslint": "8.64.0",
