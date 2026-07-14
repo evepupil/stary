@@ -13,6 +13,7 @@ import './universe-viewport.css';
 export interface UniverseViewportProps {
   readonly bodies: readonly BodyState[];
   readonly className?: string;
+  readonly focusBodyId: string | null;
   readonly onBackendChange?: (backend: RendererBackend) => void;
   readonly onError?: (error: Error) => void;
   readonly onSelectBody: (bodyId: string) => void;
@@ -22,6 +23,7 @@ export interface UniverseViewportProps {
 export function UniverseViewport({
   bodies,
   className,
+  focusBodyId,
   onBackendChange,
   onError,
   onSelectBody,
@@ -30,6 +32,7 @@ export function UniverseViewport({
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ObservatoryScene | null>(null);
   const bodiesRef = useRef(bodies);
+  const focusBodyIdRef = useRef(focusBodyId);
   const selectedBodyIdRef = useRef(selectedBodyId);
   const onBackendChangeRef = useRef(onBackendChange);
   const onErrorRef = useRef(onError);
@@ -40,6 +43,15 @@ export function UniverseViewport({
     selectedBodyIdRef.current = selectedBodyId;
     sceneRef.current?.update(bodies, selectedBodyId);
   }, [bodies, selectedBodyId]);
+
+  useEffect(() => {
+    focusBodyIdRef.current = focusBodyId;
+    if (focusBodyId === null) {
+      sceneRef.current?.showOverview();
+    } else {
+      sceneRef.current?.focusBody(focusBodyId);
+    }
+  }, [focusBodyId]);
 
   useEffect(() => {
     onBackendChangeRef.current = onBackendChange;
@@ -82,9 +94,15 @@ export function UniverseViewport({
         rendererToDispose = null;
         sceneRef.current = scene;
         scene.update(bodiesRef.current, selectedBodyIdRef.current);
+        if (focusBodyIdRef.current === null) {
+          scene.showOverview();
+        } else {
+          scene.focusBody(focusBodyIdRef.current);
+        }
         onBackendChangeRef.current?.(backend);
       })
-      .catch((error: unknown) => {
+      .catch(async (error: unknown) => {
+        await rendererPromise.catch(() => undefined);
         if (scene !== null) {
           if (sceneRef.current === scene) {
             sceneRef.current = null;

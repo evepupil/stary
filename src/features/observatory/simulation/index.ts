@@ -6,6 +6,7 @@ export {
 } from './use-universe-simulation';
 export {
   calculateRelativeScalarDrift,
+  calculateRelativeSpeedMetersPerSecond,
   calculateRelativeVectorDrift,
   createBodyViewModel,
   createDiagnosticsViewModel,

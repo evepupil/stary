@@ -14,6 +14,7 @@ export interface UniverseSimulationState {
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
   readonly simulationTimeSeconds: number;
+  readonly latestStateSequence: number;
   readonly timeScale: number;
   readonly error: Error | null;
   readonly commandPending: boolean;
@@ -30,6 +31,7 @@ export function createInitialSimulationState(
     diagnostics: null,
     baselineDiagnostics: null,
     simulationTimeSeconds: 0,
+    latestStateSequence: 0,
     timeScale,
     error: null,
     commandPending: true,
@@ -71,6 +73,7 @@ export function applyWorkerMessage(
         diagnostics: message.diagnostics,
         baselineDiagnostics: state.baselineDiagnostics ?? message.diagnostics,
         simulationTimeSeconds: message.simulationTimeSeconds,
+        latestStateSequence: message.sequence,
       };
     case 'status':
       return {

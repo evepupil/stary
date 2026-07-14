@@ -75,6 +75,7 @@ describe('applyWorkerMessage', () => {
       diagnostics: message.diagnostics,
       baselineDiagnostics: message.diagnostics,
       simulationTimeSeconds: 3_600,
+      latestStateSequence: 2,
     });
     expect(applyWorkerMessage({ ...initial, runState: 'running' }, message).runState).toBe(
       'running',

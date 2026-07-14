@@ -18,7 +18,7 @@ export function ObservatoryHeader({ backend, runState, simulationTime }: Observa
     <header className="observatory-header">
       <div className="observatory-brand">
         <strong>STARY</strong>
-        <span>太阳 · 地球系统</span>
+        <span>太阳系多体观测台</span>
       </div>
       <div className="header-telemetry">
         <div>

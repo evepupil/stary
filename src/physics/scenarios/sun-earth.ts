@@ -1,12 +1,13 @@
 import type { BodyState } from '../protocol/schemas';
+import { ASTRONOMICAL_UNIT_METERS, GRAVITATIONAL_CONSTANT_SI } from '../constants';
 
-export const GRAVITATIONAL_CONSTANT_SI = 6.6743e-11;
 export const SUN_MASS_KG = 1.98847e30;
 export const EARTH_MASS_KG = 5.9722e24;
-export const ASTRONOMICAL_UNIT_METERS = 149_597_870_700;
 export const SUN_RADIUS_METERS = 695_700_000;
 export const EARTH_RADIUS_METERS = 6_371_000;
 export const SUN_EARTH_TEST_ECCENTRICITY = 0.2;
+
+export { ASTRONOMICAL_UNIT_METERS, GRAVITATIONAL_CONSTANT_SI } from '../constants';
 
 export interface SunEarthScenario {
   readonly bodies: readonly BodyState[];

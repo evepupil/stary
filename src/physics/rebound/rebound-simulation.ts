@@ -1,6 +1,7 @@
 import createReboundModule from '../../../spikes/rebound-wasm/dist/rebound.mjs';
 
 import { REBOUND_WASM_URL } from '../../platform/wasm/rebound-asset';
+import { GRAVITATIONAL_CONSTANT_SI } from '../constants';
 import { MAX_MAJOR_BODY_COUNT, type BodyState, type PhysicsDiagnostics } from '../protocol/schemas';
 import type {
   ReboundEmscriptenModule,
@@ -11,7 +12,7 @@ import type {
   ReboundWasmBinary,
 } from './emscripten-types';
 
-export const DEFAULT_GRAVITATIONAL_CONSTANT = 6.6743e-11;
+export const DEFAULT_GRAVITATIONAL_CONSTANT = GRAVITATIONAL_CONSTANT_SI;
 export const DEFAULT_IAS15_INITIAL_TIMESTEP_SECONDS = 3_600;
 
 const IAS15_INTEGRATOR_CODE = 0;

@@ -1,22 +1,30 @@
 import type { BodyState, PhysicsDiagnostics } from '../../../physics/protocol/schemas';
-import { createDiagnosticsViewModel, formatDistance, formatMass, formatSpeed } from '../simulation';
+import { celestialColorToCss, getCelestialCatalogEntry } from '../catalog';
+import {
+  calculateRelativeSpeedMetersPerSecond,
+  createDiagnosticsViewModel,
+  formatDistance,
+  formatMass,
+  formatSpeed,
+} from '../simulation';
 
 interface BodyInspectorProps {
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
   readonly body: BodyState | null;
+  readonly bodies: readonly BodyState[];
   readonly diagnostics: PhysicsDiagnostics | null;
 }
-
-const bodyNames: Record<string, string> = {
-  sun: '太阳',
-  earth: '地球',
-};
 
 function vectorMagnitude(vector: { readonly x: number; readonly y: number; readonly z: number }) {
   return Math.hypot(vector.x, vector.y, vector.z);
 }
 
-export function BodyInspector({ baselineDiagnostics, body, diagnostics }: BodyInspectorProps) {
+export function BodyInspector({
+  baselineDiagnostics,
+  body,
+  bodies,
+  diagnostics,
+}: BodyInspectorProps) {
   if (body === null) {
     return (
       <div className="panel-content empty-inspector">
@@ -26,7 +34,16 @@ export function BodyInspector({ baselineDiagnostics, body, diagnostics }: BodyIn
   }
 
   const distance = vectorMagnitude(body.positionMeters);
-  const speed = vectorMagnitude(body.velocityMetersPerSecond);
+  const metadata = getCelestialCatalogEntry(body.id);
+  const parent =
+    metadata?.orbitParentId === null || metadata?.orbitParentId === undefined
+      ? null
+      : (bodies.find((candidate) => candidate.id === metadata.orbitParentId) ?? null);
+  const speed = calculateRelativeSpeedMetersPerSecond(body, parent);
+  const speedReferenceLabel =
+    parent === null
+      ? '质心系速度'
+      : `相对${getCelestialCatalogEntry(parent.id)?.name ?? parent.id}速度`;
   const diagnosticViewModel =
     diagnostics === null || baselineDiagnostics === null
       ? null
@@ -39,10 +56,13 @@ export function BodyInspector({ baselineDiagnostics, body, diagnostics }: BodyIn
         <span>SI</span>
       </div>
       <div className="inspector-title">
-        <span className={`body-swatch body-swatch-${body.id}`} />
+        <span
+          className="body-swatch"
+          style={{ backgroundColor: celestialColorToCss(metadata?.color ?? 0xaeb8bd) }}
+        />
         <div>
-          <h2>{bodyNames[body.id] ?? body.id}</h2>
-          <p>{body.id === 'sun' ? '系统主恒星' : '质心参考系'}</p>
+          <h2>{metadata?.name ?? body.id}</h2>
+          <p>{metadata?.type ?? '未知天体'}</p>
         </div>
       </div>
       <dl className="measurement-list">
@@ -59,7 +79,7 @@ export function BodyInspector({ baselineDiagnostics, body, diagnostics }: BodyIn
           <dd>{formatDistance(distance)}</dd>
         </div>
         <div>
-          <dt>轨道速度</dt>
+          <dt>{speedReferenceLabel}</dt>
           <dd>{formatSpeed(speed)}</dd>
         </div>
       </dl>
@@ -68,12 +88,12 @@ export function BodyInspector({ baselineDiagnostics, body, diagnostics }: BodyIn
         <div>
           <span>总能量</span>
           <strong>{diagnosticViewModel?.totalEnergy.valueLabel ?? '等待状态'}</strong>
-          <small>{`相对漂移 ${diagnosticViewModel?.totalEnergy.relativeDriftLabel ?? '--'}`}</small>
+          <small>{`相对漂移 ${diagnosticViewModel?.totalEnergy.driftLabel ?? '--'}`}</small>
         </div>
         <div>
           <span>角动量</span>
           <strong>{diagnosticViewModel?.totalAngularMomentum.valueLabel ?? '等待状态'}</strong>
-          <small>{`相对漂移 ${diagnosticViewModel?.totalAngularMomentum.relativeDriftLabel ?? '--'}`}</small>
+          <small>{`相对漂移 ${diagnosticViewModel?.totalAngularMomentum.driftLabel ?? '--'}`}</small>
         </div>
       </div>
     </div>

@@ -6,7 +6,7 @@ import type {
   PhysicsDiagnostics,
   WorkerToMainMessage,
 } from '../../../physics/protocol/schemas';
-import { createCircularSunEarthScenario } from '../../../physics/scenarios/sun-earth';
+import { createSolarSystemScenario } from '../../../physics/scenarios/solar-system';
 import {
   applyControllerFatalError,
   applyWorkerMessage,
@@ -19,7 +19,7 @@ import {
 export const DEFAULT_OBSERVATORY_TIME_SCALE = 86_400;
 export const DEFAULT_OBSERVATORY_STEP_SECONDS = 3_600;
 
-const INITIAL_SCENARIO = createCircularSunEarthScenario();
+const INITIAL_SCENARIO = createSolarSystemScenario();
 const RESOLVED_COMMAND = Promise.resolve();
 
 type ControllerCommand = (controller: PhysicsWorkerController) => Promise<unknown>;
@@ -34,6 +34,7 @@ export interface UniverseSimulation {
   readonly timeScale: number;
   readonly error: Error | null;
   readonly commandPending: boolean;
+  readonly latestStateSequence: number;
   readonly start: () => void;
   readonly pause: () => void;
   readonly toggle: () => void;

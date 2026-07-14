@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { PhysicsDiagnostics } from '../../../physics/protocol/schemas';
 import {
   calculateRelativeScalarDrift,
+  calculateRelativeSpeedMetersPerSecond,
   calculateRelativeVectorDrift,
   createBodyViewModel,
   createDiagnosticsViewModel,
@@ -45,6 +46,26 @@ describe('simulation view model formatters', () => {
       speedLabel: '29.78 km/s',
     });
   });
+
+  it('按轨道父级计算相对速度', () => {
+    const earth = {
+      id: 'earth',
+      massKg: 5.9722e24,
+      radiusMeters: 6_371_000,
+      positionMeters: { x: 0, y: 0, z: 0 },
+      velocityMetersPerSecond: { x: -29_780, y: 0, z: 0 },
+    };
+    const moon = {
+      id: 'moon',
+      massKg: 7.34e22,
+      radiusMeters: 1_737_530,
+      positionMeters: { x: 384_400_000, y: 0, z: 0 },
+      velocityMetersPerSecond: { x: -29_780, y: 1_022, z: 0 },
+    };
+
+    expect(calculateRelativeSpeedMetersPerSecond(moon, earth)).toBe(1_022);
+    expect(calculateRelativeSpeedMetersPerSecond(moon, null)).toBeCloseTo(29_797.5, 1);
+  });
 });
 
 describe('conservation diagnostics', () => {
@@ -75,8 +96,12 @@ describe('conservation diagnostics', () => {
     const viewModel = createDiagnosticsViewModel(diagnostics, baseline);
 
     expect(viewModel.totalEnergy.valueLabel).toBe('-1.001e+2 J');
-    expect(viewModel.totalEnergy.relativeDrift).toBeCloseTo(0.001);
-    expect(viewModel.totalLinearMomentum.relativeDrift).toBeCloseTo(0.01);
-    expect(viewModel.totalAngularMomentum.relativeDrift).toBeCloseTo(0.0001);
+    expect(viewModel.totalEnergy.drift).toBeCloseTo(0.001);
+    expect(viewModel.totalLinearMomentum.drift).toBeCloseTo(0.05);
+    expect(viewModel.totalLinearMomentum).toMatchObject({
+      driftKind: 'absolute',
+      driftLabel: '5.000e-2 kg m/s',
+    });
+    expect(viewModel.totalAngularMomentum.drift).toBeCloseTo(0.0001);
   });
 });

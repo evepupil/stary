@@ -26,8 +26,9 @@ export interface BodyViewModel {
 
 export interface DiagnosticMeasurementViewModel {
   readonly valueLabel: string;
-  readonly relativeDrift: number | null;
-  readonly relativeDriftLabel: string;
+  readonly drift: number | null;
+  readonly driftKind: 'absolute' | 'relative';
+  readonly driftLabel: string;
 }
 
 export interface DiagnosticsViewModel {
@@ -44,11 +45,31 @@ function vectorMagnitude(vector: PositionMeters): number {
   return Math.hypot(vector.x, vector.y, vector.z);
 }
 
+export function calculateRelativeSpeedMetersPerSecond(
+  body: BodyState,
+  referenceBody: BodyState | null,
+): number {
+  const referenceVelocity = referenceBody?.velocityMetersPerSecond ?? { x: 0, y: 0, z: 0 };
+  return Math.hypot(
+    body.velocityMetersPerSecond.x - referenceVelocity.x,
+    body.velocityMetersPerSecond.y - referenceVelocity.y,
+    body.velocityMetersPerSecond.z - referenceVelocity.z,
+  );
+}
+
 function formatScientific(value: number, unit: string): string {
   if (!Number.isFinite(value)) {
     return '--';
   }
   return `${value.toExponential(3)} ${unit}`;
+}
+
+function vectorDifferenceMagnitude(currentValue: PositionMeters, baselineValue: PositionMeters) {
+  return Math.hypot(
+    currentValue.x - baselineValue.x,
+    currentValue.y - baselineValue.y,
+    currentValue.z - baselineValue.z,
+  );
 }
 
 export function formatSimulationTime(seconds: number): string {
@@ -124,11 +145,7 @@ export function calculateRelativeVectorDrift(
   baselineValue: PositionMeters,
 ): number | null {
   const baselineMagnitude = vectorMagnitude(baselineValue);
-  const differenceMagnitude = Math.hypot(
-    currentValue.x - baselineValue.x,
-    currentValue.y - baselineValue.y,
-    currentValue.z - baselineValue.z,
-  );
+  const differenceMagnitude = vectorDifferenceMagnitude(currentValue, baselineValue);
   if (!Number.isFinite(baselineMagnitude) || !Number.isFinite(differenceMagnitude)) {
     return null;
   }
@@ -153,7 +170,7 @@ export function formatRelativeDrift(relativeDrift: number | null): string {
 
 export function createBodyViewModel(body: BodyState): BodyViewModel {
   const distanceFromOriginMeters = vectorMagnitude(body.positionMeters);
-  const speedMetersPerSecond = vectorMagnitude(body.velocityMetersPerSecond);
+  const speedMetersPerSecond = calculateRelativeSpeedMetersPerSecond(body, null);
   return {
     id: body.id,
     distanceFromOriginMeters,
@@ -172,7 +189,7 @@ export function createDiagnosticsViewModel(
     diagnostics.totalEnergyJoules,
     baseline.totalEnergyJoules,
   );
-  const linearMomentumDrift = calculateRelativeVectorDrift(
+  const linearMomentumResidual = vectorDifferenceMagnitude(
     diagnostics.totalLinearMomentumKgMetersPerSecond,
     baseline.totalLinearMomentumKgMetersPerSecond,
   );
@@ -184,24 +201,27 @@ export function createDiagnosticsViewModel(
   return {
     totalEnergy: {
       valueLabel: formatScientific(diagnostics.totalEnergyJoules, 'J'),
-      relativeDrift: energyDrift,
-      relativeDriftLabel: formatRelativeDrift(energyDrift),
+      drift: energyDrift,
+      driftKind: 'relative',
+      driftLabel: formatRelativeDrift(energyDrift),
     },
     totalLinearMomentum: {
       valueLabel: formatScientific(
         vectorMagnitude(diagnostics.totalLinearMomentumKgMetersPerSecond),
         'kg m/s',
       ),
-      relativeDrift: linearMomentumDrift,
-      relativeDriftLabel: formatRelativeDrift(linearMomentumDrift),
+      drift: linearMomentumResidual,
+      driftKind: 'absolute',
+      driftLabel: formatScientific(linearMomentumResidual, 'kg m/s'),
     },
     totalAngularMomentum: {
       valueLabel: formatScientific(
         vectorMagnitude(diagnostics.totalAngularMomentumKgMetersSquaredPerSecond),
         'kg m^2/s',
       ),
-      relativeDrift: angularMomentumDrift,
-      relativeDriftLabel: formatRelativeDrift(angularMomentumDrift),
+      drift: angularMomentumDrift,
+      driftKind: 'relative',
+      driftLabel: formatRelativeDrift(angularMomentumDrift),
     },
   };
 }

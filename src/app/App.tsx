@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 
-import { Activity, ListTree, RotateCcw, X } from 'lucide-react';
+import { Activity, ListTree, Maximize2, RotateCcw, X } from 'lucide-react';
 
 import { BodyDirectory } from '../features/observatory/components/BodyDirectory';
 import { BodyInspector } from '../features/observatory/components/BodyInspector';
@@ -18,6 +18,7 @@ export function App() {
   const [mobilePanel, setMobilePanel] = useState<MobilePanel>(null);
   const [renderError, setRenderError] = useState<Error | null>(null);
   const [selectedBodyId, setSelectedBodyId] = useState<string | null>('earth');
+  const [focusedBodyId, setFocusedBodyId] = useState<string | null>(null);
   const [viewportKey, setViewportKey] = useState(0);
 
   const effectiveSelectedBodyId = simulation.bodies.some((body) => body.id === selectedBodyId)
@@ -30,14 +31,21 @@ export function App() {
   );
   const visibleError = renderError ?? simulation.error;
   const simulationTime = formatSimulationTime(simulation.simulationTimeSeconds);
+  const viewMode = focusedBodyId === null ? 'overview' : 'focus';
 
   const selectBody = (bodyId: string) => {
     setSelectedBodyId(bodyId);
+    setFocusedBodyId(bodyId);
     setMobilePanel('details');
+  };
+
+  const showOverview = () => {
+    setFocusedBodyId(null);
   };
 
   const retry = () => {
     setRenderError(null);
+    setFocusedBodyId(null);
     setViewportKey((current) => current + 1);
     simulation.retry();
   };
@@ -47,10 +55,13 @@ export function App() {
       className="observatory-shell"
       data-phase={simulation.phase}
       data-simulation-time-seconds={simulation.simulationTimeSeconds}
+      data-view-mode={viewMode}
+      data-worker-state-sequence={simulation.latestStateSequence}
     >
       <UniverseViewport
         bodies={simulation.bodies}
         className="universe-viewport"
+        focusBodyId={focusedBodyId}
         key={viewportKey}
         onBackendChange={(nextBackend) => {
           setBackend(nextBackend);
@@ -62,6 +73,18 @@ export function App() {
         onSelectBody={selectBody}
         selectedBodyId={effectiveSelectedBodyId}
       />
+
+      {viewMode === 'focus' ? (
+        <button
+          aria-label="返回太阳系全景"
+          className="view-reset-button"
+          onClick={showOverview}
+          title="返回太阳系全景"
+          type="button"
+        >
+          <Maximize2 aria-hidden="true" size={18} />
+        </button>
+      ) : null}
 
       <ObservatoryHeader
         backend={backend}
@@ -87,6 +110,7 @@ export function App() {
         </button>
         <BodyDirectory
           bodies={simulation.bodies}
+          focusedBodyId={focusedBodyId}
           onSelectBody={selectBody}
           selectedBodyId={effectiveSelectedBodyId}
         />
@@ -111,6 +135,7 @@ export function App() {
         <BodyInspector
           baselineDiagnostics={simulation.baselineDiagnostics}
           body={selectedBody}
+          bodies={simulation.bodies}
           diagnostics={simulation.diagnostics}
         />
       </aside>
