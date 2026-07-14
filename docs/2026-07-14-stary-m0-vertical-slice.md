@@ -58,8 +58,8 @@
 ## Known Context
 
 - 仓库当前只包含设计、路线图和 AI 开发规范，没有应用代码、依赖清单或现成测试。
-- 总体设计规格位于 `docs/superpowers/specs/2026-07-14-universe-sandbox-design.md`，提交为 `0203102`。
-- 路线图位于 `docs/superpowers/roadmap.md`，M0 当前状态为 `active`。
+- 总体设计规格位于 `docs/2026-07-14-universe-sandbox-design.md`，提交为 `0203102`。
+- 路线图位于 `docs/roadmap.md`，M0 当前状态为 `active`。
 - 仓库规范位于 `AGENTS.md`，要求严格类型、核心逻辑单测、浏览器验收、模块归档和通过门禁后直接提交。
 - 当前机器已验证 Node `22.14.0`、npm `10.9.2`、pnpm `10.21.0`、Rust `1.96.0` 和 Cargo `1.96.0` 可用。
 - 当前机器未检测到 `wasm-pack`、Clang 或 Emscripten `emcc`。
