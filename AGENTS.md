@@ -33,8 +33,9 @@
 - 单元与物理集成测试命令为 `pnpm test`；它会直接运行固定 REBOUND WASM 的圆轨道、椭圆轨道和 1000 周期守恒测试。生产构建命令为 `pnpm build`。
 - 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测、生产构建和 Playwright 浏览器验收。首次在新环境运行前使用 `pnpm test:e2e:install` 安装 Chrome。
 - 浏览器验收也可单独运行 `pnpm test:e2e`。它覆盖非空画布像素、暂停、单步、倍率、恢复运行、手机抽屉和 WebGL2 真实回退。
+- 当前观测台性能采样命令为 `pnpm test:performance`。它构建生产包，通过短生命周期 Vite preview 采样 2 秒 RAF 和 Worker state 序号推进频率，完成后自动退出；历史 M0 双天体基线以验收文档中的固定提交和数值为准。
 - `pnpm build` 会检查生产包不含 source map，验证正式 physics Worker、观测场景与 WebGPU/WebGL 渲染模块均已按需产出，并按 `artifact-lock.json` 校验 REBOUND 胶水源文件、原始 WASM 和发布 WASM。
-- 正式观测台通过 `useUniverseSimulation` 驱动 Worker 生命周期；画面优先使用 WebGPU，初始化失败时回退 WebGL2。天体 mesh 使用真实半径，屏幕空间定位环只负责可见性和选择。
+- 正式观测台通过 `useUniverseSimulation` 驱动 JPL J2000 太阳系 10 体 Worker 生命周期；画面优先使用 WebGPU，初始化失败时回退 WebGL2。天体 mesh 使用真实半径，屏幕空间定位环只负责可见性和选择。
 - REBOUND/WASM 隔离原型使用固定 Docker 镜像构建，命令为 `spikes/rebound-wasm/scripts/build.ps1`。
 - 原型测试命令为 `node --test spikes/rebound-wasm/tests/*.test.mjs`，数值报告命令为 `node spikes/rebound-wasm/scripts/run-acceptance.mjs`。
 - 原型完整门禁为 `powershell -NoProfile -ExecutionPolicy Bypass -File spikes/rebound-wasm/scripts/verify.ps1`，包含固定构建、测试、数值验收和产物哈希校验。
