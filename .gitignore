@@ -1,0 +1,7 @@
+node_modules/
+dist/
+coverage/
+*.tsbuildinfo
+
+# REBOUND source and build cache are reproducible inputs, not repository content.
+spikes/rebound-wasm/.cache/

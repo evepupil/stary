@@ -23,14 +23,20 @@
 
 ## 当前工具链
 
-- 语言与运行时：尚未建立；脚手架任务必须确定并记录版本。
-- 包管理与构建工具：尚未建立。
-- 测试框架：尚未建立。
-- 已知验证：文档变更至少运行 `git diff --check` 并检查暂存差异。
+- 语言与运行时：Node.js `22.14.0`；TypeScript `6.0.3`，应用与构建配置均开启 `strict`。
+- 包管理与构建工具：pnpm `10.21.0`、Vite `8.1.4`、React `19.2.7`、Three.js `0.185.1`。
+- 测试与代码质量：Vitest `4.1.10`、ESLint `10.7.0`、Prettier `3.9.5`。
+- 干净安装命令为 `pnpm install --frozen-lockfile`。
+- 格式检查命令为 `pnpm format:check`，修复当前工程文件格式使用 `pnpm format`。
+- 静态检查命令为 `pnpm lint`，严格类型检查命令为 `pnpm typecheck`。
+- 单元测试命令为 `pnpm test`，生产构建命令为 `pnpm build`。
+- 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测和生产构建。
+- `pnpm build` 会检查生产包不含 source map，验证模块 Worker 与 WebGPU/WebGL 渲染模块均已产出，并按 `artifact-lock.json` 的固定路径、字节数和 SHA-256 校验原型及发布 REBOUND WASM。
+- 临时工程页会运行浏览器探针：WebGPU 必须取得适配器且导入模块，否则回退 WebGL2；Worker 检查 ready、错误和超时；WASM 检查请求、`application/wasm` MIME 与 `WebAssembly.compileStreaming`。
 - REBOUND/WASM 隔离原型使用固定 Docker 镜像构建，命令为 `spikes/rebound-wasm/scripts/build.ps1`。
 - 原型测试命令为 `node --test spikes/rebound-wasm/tests/*.test.mjs`，数值报告命令为 `node spikes/rebound-wasm/scripts/run-acceptance.mjs`。
 - 原型完整门禁为 `powershell -NoProfile -ExecutionPolicy Bypass -File spikes/rebound-wasm/scripts/verify.ps1`，包含固定构建、测试、数值验收和产物哈希校验。
-- 建立脚手架后必须及时更新本节，记录仓库真实命令，禁止凭经验编造命令。
+- 文档变更至少运行 `git diff --check` 并检查暂存差异。
 
 ## 代码质量
 

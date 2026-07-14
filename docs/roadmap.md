@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M0 实施中。Task 1 的 REBOUND WebAssembly 固定构建、Node 验收和桌面浏览器 Worker 验收均已完成，进入 Task 2 工程脚手架。
+M0 实施中。Task 1 的 REBOUND WebAssembly 交付路径和 Task 2 的严格工程底座均已完成，进入 Task 3 正式 Worker 消息协议。
 
 ## Milestones
 
@@ -22,13 +22,14 @@ M0 实施中。Task 1 的 REBOUND WebAssembly 固定构建、Node 验收和桌�
 ## Active Work
 
 - M0 Task 1：已完成。固定构建、GPL 边界、一周期与 1000 周期验收、浏览器 Worker 和产物哈希门禁均有证据。
-- M0 Task 2：开始建立严格工程底座。
+- M0 Task 2：已完成。React/Vite/TypeScript strict、pnpm 锁文件、格式/lint/类型/单测/生产构建门禁和前端产物检查均已建立。
+- M0 Task 3：准备建立带版本、单位和运行时校验的正式 Worker 消息协议。
 
 ## Next Recommended Steps
 
-1. 执行 M0 Task 2，建立严格工程底座。
-2. 建立带版本与运行时校验的正式 Worker 消息协议。
-3. 按正式消息协议交付双天体轨道切片。
+1. 执行 M0 Task 3，建立带版本、单位和运行时校验的正式 Worker 消息协议。
+2. 按正式消息协议交付双天体轨道切片。
+3. 建立 Three.js 全屏场景、相机和时间控制。
 
 ## Inbox
 
@@ -75,3 +76,4 @@ M0 实施中。Task 1 的 REBOUND WebAssembly 固定构建、Node 验收和桌�
 - 2026-07-14：完成并提交 13 章宇宙沙盒设计规格，提交 `0203102`。
 - 2026-07-14：完成 M0 Task 1 的 REBOUND/WASM 固定构建、Node 轨道验收、许可记录和静态 Worker 验收页。
 - 2026-07-14：完成 M0 Task 1 浏览器验收；一周期与 1000 周期指标通过，控制台无 warning/error，并建立固定产物哈希门禁。
+- 2026-07-14：完成 M0 Task 2 严格工程底座；建立可重复安装、格式/lint/类型/单测/生产构建门禁，并验证 Worker、WASM、WebGPU 和 WebGL2 构建产物。
