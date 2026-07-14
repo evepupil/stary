@@ -27,6 +27,9 @@
 - 包管理与构建工具：尚未建立。
 - 测试框架：尚未建立。
 - 已知验证：文档变更至少运行 `git diff --check` 并检查暂存差异。
+- REBOUND/WASM 隔离原型使用固定 Docker 镜像构建，命令为 `spikes/rebound-wasm/scripts/build.ps1`。
+- 原型测试命令为 `node --test spikes/rebound-wasm/tests/*.test.mjs`，数值报告命令为 `node spikes/rebound-wasm/scripts/run-acceptance.mjs`。
+- 原型完整门禁为 `powershell -NoProfile -ExecutionPolicy Bypass -File spikes/rebound-wasm/scripts/verify.ps1`，包含固定构建、测试、数值验收和产物哈希校验。
 - 建立脚手架后必须及时更新本节，记录仓库真实命令，禁止凭经验编造命令。
 
 ## 代码质量

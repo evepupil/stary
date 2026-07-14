@@ -1,0 +1,27 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>STARY REBOUND/WASM 验收</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <p class="eyebrow">STARY M0 / PHYSICS DELIVERY SPIKE</p>
+        <h1>REBOUND Web Worker 轨道验收</h1>
+        <p data-status data-state="running">正在加载 Worker...</p>
+      </header>
+      <div class="actions" aria-label="验收操作">
+        <button type="button" data-kind="one-period">运行一周期</button>
+        <button type="button" data-kind="long">运行 1000 周期</button>
+      </div>
+      <table>
+        <thead><tr><th>指标</th><th>实测</th><th>上限</th><th>结论</th></tr></thead>
+        <tbody data-output></tbody>
+      </table>
+    </main>
+    <script type="module" src="./app.mjs"></script>
+  </body>
+</html>

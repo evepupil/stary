@@ -1,0 +1,6 @@
+diff --git a/src/simulation.c b/src/simulation.c
+--- a/src/simulation.c
++++ b/src/simulation.c
+@@ -401 +401 @@
+-            emscripten_sleep(0); // allow drawing and event handling
++            // STARY: Dedicated Worker scheduling is handled by JavaScript between integrations.

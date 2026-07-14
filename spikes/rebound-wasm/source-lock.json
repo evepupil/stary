@@ -1,0 +1,18 @@
+{
+  "name": "REBOUND",
+  "version": "5.0.1",
+  "tag": "5.0.1",
+  "repository": "https://github.com/hannorein/rebound",
+  "commit": "cabb68a03ebb4f3f1c71c6ff8cde33a1476ac417",
+  "sourceUrl": "https://github.com/hannorein/rebound/archive/cabb68a03ebb4f3f1c71c6ff8cde33a1476ac417.tar.gz",
+  "sha256": "7D08E61EF5F0D2BFA6FBE3BF810D33F87A3FA1061B185595B7412AC685918FCD",
+  "patches": [
+    {
+      "path": "patches/rebound-5.0.1-worker-no-emscripten-sleep.patch",
+      "sha256": "02547C2CD55D19828988E0B68234EFA24C6CFA45507CA9745CA7973D6AEE734C"
+    }
+  ],
+  "license": "GPL-3.0-or-later",
+  "buildImage": "emscripten/emsdk:6.0.3",
+  "buildImageDigest": "sha256:bb0910e6a18bb9bd7cb31ae4ed40f9073148b78cb2cdb8ea8676454e0d85425c"
+}

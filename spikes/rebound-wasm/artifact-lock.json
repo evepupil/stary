@@ -1,0 +1,20 @@
+{
+  "inputs": {
+    "sourceCommit": "cabb68a03ebb4f3f1c71c6ff8cde33a1476ac417",
+    "sourceSha256": "7D08E61EF5F0D2BFA6FBE3BF810D33F87A3FA1061B185595B7412AC685918FCD",
+    "patchSha256": "02547C2CD55D19828988E0B68234EFA24C6CFA45507CA9745CA7973D6AEE734C",
+    "buildImageDigest": "sha256:bb0910e6a18bb9bd7cb31ae4ed40f9073148b78cb2cdb8ea8676454e0d85425c"
+  },
+  "artifacts": [
+    {
+      "path": "dist/rebound.mjs",
+      "bytes": 11455,
+      "sha256": "5C74A3C7EBAC0C1CB34053DC66FA965AD2DCAD732FD0C87C66964B24EB1C5753"
+    },
+    {
+      "path": "dist/rebound.wasm",
+      "bytes": 233850,
+      "sha256": "EEF427DC31008D3A4E078AE6FE2B7E040D8DA3134F33681A871936DE79E9F817"
+    }
+  ]
+}
