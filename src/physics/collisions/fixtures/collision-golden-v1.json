@@ -1,0 +1,85 @@
+{
+  "version": 1,
+  "specificImpactEnergy": [
+    {
+      "targetMassKg": 4200000000000000,
+      "projectileMassKg": 4200000000000000,
+      "impactSpeedMetersPerSecond": 30,
+      "expectedJoulesPerKg": 112.5
+    },
+    {
+      "targetMassKg": 4200000000000000,
+      "projectileMassKg": 1050000000000000,
+      "impactSpeedMetersPerSecond": 40,
+      "expectedJoulesPerKg": 128
+    },
+    {
+      "targetMassKg": 4200000000000000,
+      "projectileMassKg": 420000000000000,
+      "impactSpeedMetersPerSecond": 65,
+      "expectedJoulesPerKg": 174.5867768595041
+    }
+  ],
+  "interactingFraction": [
+    { "massRatio": 1, "impactParameter": 0.7, "expected": 0.216 },
+    { "massRatio": 1, "impactParameter": 0.9, "expected": 0.028 },
+    { "massRatio": 0.25, "impactParameter": 0.7, "expected": 0.334966809928 },
+    { "massRatio": 0.1, "impactParameter": 0.7, "expected": 0.459786453069 },
+    { "massRatio": 0.1, "impactParameter": 0.35, "expected": 1 }
+  ],
+  "principalDisruption": [
+    {
+      "profile": "gravitySolid",
+      "combinedRadiusMeters": 1000000,
+      "expectedThresholdJoulesPerKg": 838717.2739141742,
+      "expectedCriticalSpeedMetersPerSecond": 2590.3162338435
+    },
+    {
+      "profile": "gravityFluid",
+      "combinedRadiusMeters": 1000000,
+      "expectedThresholdJoulesPerKg": 318712.5640873861,
+      "expectedCriticalSpeedMetersPerSecond": 1596.7781664023
+    }
+  ],
+  "fullDisruptionChain": {
+    "combinedRadiusMeters": 1000000,
+    "totalMassKg": 4.1887902047863906e21,
+    "massRatio": 0.1,
+    "targetRadiusMeters": 671679.386214,
+    "projectileRadiusMeters": 311765.953882,
+    "impactAngleDegrees": 45,
+    "expectedCriticalImpactParameter": 0.682985986947,
+    "expectedInteractingFraction": 0.443044520782,
+    "expectedReducedMassRatio": 2.142826824789,
+    "expectedHeadOnThresholdJoulesPerKg": 2037333.201403,
+    "expectedObliqueThresholdJoulesPerKg": 6128276.970907,
+    "expectedCriticalSpeedMetersPerSecond": 12178.0254022
+  },
+  "highInteractionDisruptionChain": {
+    "combinedRadiusMeters": 1000000,
+    "totalMassKg": 4.1887902047863906e21,
+    "massRatio": 0.1,
+    "targetRadiusMeters": 671679.386214,
+    "projectileRadiusMeters": 311765.953882,
+    "impactAngleDegrees": 30,
+    "expectedCriticalImpactParameter": 0.6829859869471071,
+    "expectedInteractingFraction": 0.8848337097224561,
+    "expectedReducedMassRatio": 1.1183235068630917,
+    "expectedHeadOnThresholdJoulesPerKg": 2037333.2014032272,
+    "expectedObliqueThresholdJoulesPerKg": 2394649.928947791,
+    "expectedCriticalSpeedMetersPerSecond": 7612.524435464
+  },
+  "largestRemnant": [
+    { "normalizedImpactEnergy": 0.5, "expectedFraction": 0.75 },
+    { "normalizedImpactEnergy": 1, "expectedFraction": 0.5 },
+    { "normalizedImpactEnergy": 1.8, "expectedFraction": 0.1 },
+    { "normalizedImpactEnergy": 3, "expectedFraction": 0.0464758001545 },
+    { "normalizedImpactEnergy": 10, "expectedFraction": 0.00763675323681 }
+  ],
+  "gendaCriticalVelocityRatio": [
+    { "massRatio": 1, "impactAngleDegrees": 30, "expected": 1.408804653252 },
+    { "massRatio": 1, "impactAngleDegrees": 45, "expected": 1.16635475101 },
+    { "massRatio": 1, "impactAngleDegrees": 60, "expected": 1.092219940357 },
+    { "massRatio": 0.25, "impactAngleDegrees": 30, "expected": 1.642065074994 }
+  ]
+}
