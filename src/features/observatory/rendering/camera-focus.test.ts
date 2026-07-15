@@ -1,7 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BodyState } from '../../../physics/protocol/schemas';
-import { computeFocusCameraFrame, computeOverviewCameraFrame } from './camera-focus';
+import {
+  computeBodyInspectionCameraFrame,
+  computeFocusCameraFrame,
+  computeOverviewCameraFrame,
+} from './camera-focus';
 
 function createBody(id: string, x: number, radiusMeters: number): BodyState {
   return {
@@ -40,5 +44,17 @@ describe('observatory camera focus', () => {
     expect(frame.target.x).toBeCloseTo(1.0004);
     expect(frame.halfExtent).toBeGreaterThanOrEqual(0.001);
     expect(frame.distance).toBeGreaterThan(0);
+  });
+
+  it('近景观察使用真实半径，并为土星环扩大构图范围', () => {
+    const saturn = createBody('saturn', 10, 0.0001);
+    const bodyFrame = computeBodyInspectionCameraFrame(saturn, 1, 16 / 9);
+    const ringFrame = computeBodyInspectionCameraFrame(saturn, 1, 16 / 9, 2.27);
+
+    expect(bodyFrame.target).toEqual({ x: 10, y: 0, z: 0 });
+    expect(bodyFrame.halfExtent).toBeCloseTo(0.00021, 12);
+    expect(ringFrame.halfExtent).toBeCloseTo(bodyFrame.halfExtent * 2.27, 12);
+    expect(ringFrame.distance).toBeGreaterThan(bodyFrame.distance);
+    expect(() => computeBodyInspectionCameraFrame(saturn, 1, 1, 0)).toThrow(RangeError);
   });
 });

@@ -27,7 +27,10 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { BodyState } from '../../../physics/protocol/schemas';
 import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import { getCelestialCatalogEntry } from '../catalog';
+import { resolveBodyAssetPlan } from './assets/body-asset-plan';
+import { TextureAssetCache } from './assets/texture-cache';
 import {
+  computeBodyInspectionCameraFrame,
   computeFocusCameraFrame,
   computeOverviewCameraFrame,
   type ObservatoryCameraFrame,
@@ -63,6 +66,7 @@ import {
   type ScreenMarkerCandidate,
 } from './marker-layout';
 import {
+  BODY_LOD_THRESHOLDS,
   RENDER_SCALE_THRESHOLDS,
   computeProjectedRadiusPixels,
   selectBodyLod,
@@ -89,6 +93,20 @@ const CREATION_VELOCITY_DRAG_SECONDS = 10_000_000;
 
 function usesCreationCamera(state: CreationOverlayState | null): boolean {
   return state?.enabled === true && state.cameraMode === 'creation';
+}
+
+function projectWorldPoint(
+  worldPoint: Vector3,
+  camera: PerspectiveCamera,
+  width: number,
+  height: number,
+): { readonly x: number; readonly y: number; readonly z: number } {
+  const projected = worldPoint.project(camera);
+  return {
+    x: Number((((projected.x + 1) / 2) * width).toFixed(2)),
+    y: Number((((1 - projected.y) / 2) * height).toFixed(2)),
+    z: Number(projected.z.toFixed(6)),
+  };
 }
 
 interface OrbitVisual {
@@ -138,6 +156,7 @@ export class ObservatoryScene {
   private readonly renderer: ObservatoryRenderer;
   private readonly resizeObserver: ResizeObserver | null = null;
   private readonly scene = new Scene();
+  private readonly textureCache = new TextureAssetCache();
   private readonly exposeMarkerDiagnostics =
     new URLSearchParams(window.location.search).get(MARKER_DIAGNOSTICS_QUERY_PARAMETER) === '1';
   private readonly exposeVisualDiagnostics =
@@ -268,6 +287,8 @@ export class ObservatoryScene {
           'low',
           lightActive,
           this.metersToSceneUnit,
+          resolveBodyAssetPlan(body.id),
+          this.textureCache,
         );
         this.bodyVisuals.set(body.id, visual);
       }
@@ -290,8 +311,7 @@ export class ObservatoryScene {
       return false;
     }
 
-    const parent = findOrbitParent(body, this.latestBodies);
-    const frame = computeFocusCameraFrame(body, parent, this.metersToSceneUnit, this.camera.aspect);
+    const frame = this.computeCameraFrameForBody(body);
     this.focusBodyId = bodyId;
     this.viewMode = 'focus';
     if (usesCreationCamera(this.creationState)) {
@@ -371,6 +391,7 @@ export class ObservatoryScene {
       disposeBodyVisual(this.scene, visual);
     }
     this.bodyVisuals.clear();
+    this.textureCache.dispose();
     this.scene.traverse(disposeRenderable);
     this.scene.clear();
     canvas.remove();
@@ -391,13 +412,14 @@ export class ObservatoryScene {
     visual.root.position.set(scenePosition.x, scenePosition.y, scenePosition.z);
     visual.mesh.scale.setScalar(physicalRadiusSceneUnits);
     visual.halo?.scale.set(physicalRadiusSceneUnits * 3.2, physicalRadiusSceneUnits * 3.2, 1);
+    visual.planetaryRing?.mesh.scale.setScalar(physicalRadiusSceneUnits);
     visual.mesh.userData.physicalRadiusMeters = body.radiusMeters;
     visual.physicalRadiusSceneUnits = physicalRadiusSceneUnits;
 
-    visual.ring.position.copy(visual.root.position);
+    visual.markerRing.position.copy(visual.root.position);
     const selected = body.id === this.selectedBodyId;
-    visual.ring.material.opacity = selected ? 0.92 : 0.22;
-    visual.ring.material.color.setHex(selected ? 0x72f1d5 : 0x4cc9b0);
+    visual.markerRing.material.opacity = selected ? 0.92 : 0.22;
+    visual.markerRing.material.color.setHex(selected ? 0x72f1d5 : 0x4cc9b0);
   };
 
   private readonly updateOrbits = (bodies: readonly BodyState[]): void => {
@@ -502,17 +524,23 @@ export class ObservatoryScene {
         const nextLod =
           projectedRadiusPixels > 0 ? selectBodyLod(projectedRadiusPixels, visual.lod) : 'low';
         visual.projectedRadiusPixels = projectedRadiusPixels;
+        if (
+          visual.bodyId === this.focusBodyId ||
+          projectedRadiusPixels >= BODY_LOD_THRESHOLDS.medium.defaultPixels
+        ) {
+          visual.assetBinding?.start();
+        }
         updateBodyVisualLod(visual, nextLod, this.backend);
         if (visual.bodyId === this.focusBodyId) {
           focusedProjectedRadiusPixels = projectedRadiusPixels;
         }
-        visual.ring.quaternion.copy(this.camera.quaternion);
+        visual.markerRing.quaternion.copy(this.camera.quaternion);
         const minimumWorldRadius = computeMinimumBillboardWorldRadius(
-          this.camera.position.distanceTo(visual.ring.position),
+          this.camera.position.distanceTo(visual.markerRing.position),
           Math.max(1, this.mount.clientHeight),
           visual.bodyId === this.selectedBodyId ? 12 : 9,
         );
-        visual.ring.scale.setScalar(
+        visual.markerRing.scale.setScalar(
           computePositionRingRadius(visual.physicalRadiusSceneUnits, minimumWorldRadius),
         );
       }
@@ -901,6 +929,19 @@ export class ObservatoryScene {
     if (body === undefined) {
       return null;
     }
+    return this.computeCameraFrameForBody(body);
+  }
+
+  private computeCameraFrameForBody(body: BodyState): ObservatoryCameraFrame {
+    const assetPlan = resolveBodyAssetPlan(body.id);
+    if (assetPlan.surface !== null) {
+      return computeBodyInspectionCameraFrame(
+        body,
+        this.metersToSceneUnit,
+        this.camera.aspect,
+        assetPlan.ring?.outerRadiusRatio ?? 1,
+      );
+    }
     return computeFocusCameraFrame(
       body,
       findOrbitParent(body, this.latestBodies),
@@ -974,7 +1015,7 @@ export class ObservatoryScene {
         y < -MARKER_HIT_RADIUS_PIXELS ||
         y > height + MARKER_HIT_RADIUS_PIXELS
       ) {
-        visual.ring.visible = false;
+        visual.markerRing.visible = false;
         continue;
       }
 
@@ -1029,7 +1070,8 @@ export class ObservatoryScene {
       const focusedBodyIsVisibleWithoutMarker =
         visual.bodyId === this.focusBodyId &&
         visual.projectedRadiusPixels >= RENDER_SCALE_THRESHOLDS.orbit.exitPixels;
-      visual.ring.visible = visibleIds.has(visual.bodyId) && !focusedBodyIsVisibleWithoutMarker;
+      visual.markerRing.visible =
+        visibleIds.has(visual.bodyId) && !focusedBodyIsVisibleWithoutMarker;
     }
   }
 
@@ -1061,6 +1103,39 @@ export class ObservatoryScene {
         .map((visual) => ({ id: visual.bodyId, kind: visual.surfaceKind }))
         .toSorted((left, right) => left.id.localeCompare(right.id)),
     );
+    canvas.dataset.visualSurfaceResources = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .map((visual) => ({
+          id: visual.bodyId,
+          ...(visual.assetBinding?.diagnostics().surface ?? {
+            assetId: null,
+            bound: false,
+            state: 'procedural',
+          }),
+        }))
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    );
+    canvas.dataset.visualPlanetaryRingResources = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => visual.planetaryRing !== null)
+        .map((visual) => ({
+          id: visual.bodyId,
+          innerRadiusRatio: visual.planetaryRing?.innerRadiusRatio ?? 0,
+          outerRadiusRatio: visual.planetaryRing?.outerRadiusRatio ?? 0,
+          visible: visual.planetaryRing?.mesh.visible ?? false,
+          ...(visual.assetBinding?.diagnostics().ring ?? {
+            assetId: null,
+            bound: false,
+            state: 'procedural',
+          }),
+        })),
+    );
+    canvas.dataset.visualResourceCounts = JSON.stringify({
+      planetaryRingMeshes: [...this.bodyVisuals.values()].filter(
+        (visual) => visual.planetaryRing !== null,
+      ).length,
+      textureCache: this.textureCache.snapshot(),
+    });
     const width = Math.max(1, this.mount.clientWidth);
     const height = Math.max(1, this.mount.clientHeight);
     canvas.dataset.visualBodyProjections = JSON.stringify(
@@ -1076,10 +1151,46 @@ export class ObservatoryScene {
         })
         .toSorted((left, right) => left.id.localeCompare(right.id)),
     );
+    canvas.dataset.visualPlanetaryRingProjections = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => visual.planetaryRing !== null)
+        .map((visual) => {
+          const ring = visual.planetaryRing;
+          if (ring === null) {
+            throw new Error('行星环诊断缺少视觉对象');
+          }
+          const center = projectWorldPoint(
+            ring.mesh.localToWorld(new Vector3(0, 0, 0)),
+            this.camera,
+            width,
+            height,
+          );
+          const outerX = projectWorldPoint(
+            ring.mesh.localToWorld(new Vector3(ring.outerRadiusRatio, 0, 0)),
+            this.camera,
+            width,
+            height,
+          );
+          const outerY = projectWorldPoint(
+            ring.mesh.localToWorld(new Vector3(0, ring.outerRadiusRatio, 0)),
+            this.camera,
+            width,
+            height,
+          );
+          return {
+            axisX: { x: outerX.x - center.x, y: outerX.y - center.y },
+            axisY: { x: outerY.x - center.x, y: outerY.y - center.y },
+            center,
+            id: visual.bodyId,
+            innerRadiusFraction: ring.innerRadiusRatio / ring.outerRadiusRatio,
+          };
+        }),
+    );
     canvas.dataset.visualLodCounts = JSON.stringify(lodCounts);
     canvas.dataset.visualToneMappingExposure = String(this.renderer.toneMappingExposure);
     canvas.dataset.visualFocusedMarkerVisible = String(
-      this.focusBodyId !== null && (this.bodyVisuals.get(this.focusBodyId)?.ring.visible ?? false),
+      this.focusBodyId !== null &&
+        (this.bodyVisuals.get(this.focusBodyId)?.markerRing.visible ?? false),
     );
   }
 
@@ -1099,6 +1210,7 @@ export class ObservatoryScene {
     canvas.removeEventListener('pointercancel', this.handlePointerCancel);
     this.scene.traverse(disposeRenderable);
     this.scene.clear();
+    this.textureCache.dispose();
     canvas.remove();
   }
 }

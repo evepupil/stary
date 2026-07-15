@@ -76,6 +76,25 @@ export function computeFocusCameraFrame(
   };
 }
 
+export function computeBodyInspectionCameraFrame(
+  body: BodyState,
+  metersToSceneUnit: number,
+  aspect: number,
+  outerRadiusRatio = 1,
+): ObservatoryCameraFrame {
+  if (!Number.isFinite(outerRadiusRatio) || outerRadiusRatio <= 0) {
+    throw new RangeError('outerRadiusRatio 必须是正有限数');
+  }
+  const target = positionMetersToScene(body.positionMeters, metersToSceneUnit);
+  const bodyRadius = physicalRadiusToSceneUnits(body.radiusMeters, metersToSceneUnit);
+  const halfExtent = Math.max(1e-9, bodyRadius * outerRadiusRatio * 2.1);
+  return {
+    target,
+    halfExtent,
+    distance: computeCameraFitDistance(halfExtent, aspect),
+  };
+}
+
 function distance(left: ScenePosition, right: ScenePosition): number {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
 }

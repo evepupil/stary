@@ -8,6 +8,15 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const distDirectory = path.join(projectRoot, 'dist');
 const reboundSpikeDirectory = path.join(projectRoot, 'spikes', 'rebound-wasm');
 const artifactLockPath = path.join(reboundSpikeDirectory, 'artifact-lock.json');
+const planetaryManifestPath = path.join(
+  projectRoot,
+  'src',
+  'features',
+  'observatory',
+  'rendering',
+  'assets',
+  'planetary-assets.json',
+);
 const lockedGluePath = 'dist/rebound.mjs';
 const lockedWasmPath = 'dist/rebound.wasm';
 
@@ -59,7 +68,44 @@ function assertLockedWasm(label, content, lockedArtifact) {
   }
 }
 
+function readPlanetaryAssets(manifest) {
+  if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.assets)) {
+    throw new Error('planetary-assets.json 结构无效');
+  }
+  if (manifest.assets.length !== 11) {
+    throw new Error(`应锁定 11 个行星画面资产，实际为 ${manifest.assets.length} 个`);
+  }
+  const ids = new Set();
+  const files = new Set();
+  for (const asset of manifest.assets) {
+    if (typeof asset?.id !== 'string' || ids.has(asset.id)) {
+      throw new Error(`行星画面资产 ID 无效或重复: ${String(asset?.id)}`);
+    }
+    if (
+      typeof asset.file !== 'string' ||
+      files.has(asset.file) ||
+      path.posix.basename(asset.file) !== asset.file
+    ) {
+      throw new Error(`行星画面资产文件名无效或重复: ${String(asset.file)}`);
+    }
+    if (asset.url !== `/assets/planetary/${asset.file}`) {
+      throw new Error(`行星画面资产 ${asset.id} 使用了非本地运行时 URL`);
+    }
+    if (!Number.isSafeInteger(asset.bytes) || asset.bytes <= 0) {
+      throw new Error(`行星画面资产 ${asset.id} 的字节数无效`);
+    }
+    if (typeof asset.sha256 !== 'string' || !/^[A-F0-9]{64}$/.test(asset.sha256)) {
+      throw new Error(`行星画面资产 ${asset.id} 的 SHA-256 无效`);
+    }
+    ids.add(asset.id);
+    files.add(asset.file);
+  }
+  return manifest.assets;
+}
+
 const artifactLock = JSON.parse(await readFile(artifactLockPath, 'utf8'));
+const planetaryManifest = JSON.parse(await readFile(planetaryManifestPath, 'utf8'));
+const planetaryAssets = readPlanetaryAssets(planetaryManifest);
 const lockedGlueArtifact = readLockedArtifact(artifactLock, lockedGluePath);
 const lockedWasmArtifact = readLockedArtifact(artifactLock, lockedWasmPath);
 const files = await listFiles(distDirectory);
@@ -117,6 +163,19 @@ if (!dynamicImports.some((modulePath) => modulePath.endsWith('/three.module.js')
 }
 if (!dynamicImports.some((modulePath) => modulePath.endsWith('/observatory-scene.ts'))) {
   throw new Error('生产构建清单缺少按需加载的观测场景模块');
+}
+
+for (const asset of planetaryAssets) {
+  const builtAssetPath = path.join(distDirectory, 'assets', 'planetary', asset.file);
+  const content = await readFile(builtAssetPath);
+  if (content.byteLength !== asset.bytes) {
+    throw new Error(
+      `行星画面资产 ${asset.id} 字节数不匹配：预期 ${asset.bytes}，实际 ${content.byteLength}`,
+    );
+  }
+  if (sha256(content) !== asset.sha256) {
+    throw new Error(`行星画面资产 ${asset.id} SHA-256 不匹配`);
+  }
 }
 
 const sizes = await Promise.all(

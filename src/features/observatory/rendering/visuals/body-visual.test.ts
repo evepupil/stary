@@ -1,7 +1,10 @@
-import { Scene } from 'three';
+import { Scene, Texture } from 'three';
 import { describe, expect, it, vi } from 'vitest';
 
 import type { BodyAppearanceProfile } from '../appearance/body-appearance';
+import { resolveBodyAssetPlan } from '../assets/body-asset-plan';
+import type { LoadedTextureResource, TextureAssetLoader } from '../assets/browser-texture-loader';
+import { TextureAssetCache } from '../assets/texture-cache';
 import {
   STELLAR_LIGHT_DISTANCE_DECAY,
   STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
@@ -13,6 +16,24 @@ import {
   updateBodyVisualAppearance,
   updateBodyVisualLod,
 } from './body-visual';
+
+interface Deferred<T> {
+  readonly promise: Promise<T>;
+  resolve(value: T): void;
+}
+
+function deferred<T>(): Deferred<T> {
+  let resolvePromise: ((value: T) => void) | undefined;
+  const promise = new Promise<T>((resolve) => {
+    resolvePromise = resolve;
+  });
+  return {
+    promise,
+    resolve(value): void {
+      resolvePromise?.(value);
+    },
+  };
+}
 
 function appearance(overrides: Partial<BodyAppearanceProfile> = {}): BodyAppearanceProfile {
   return {
@@ -49,7 +70,7 @@ describe('body visual resources', () => {
     );
 
     expect(scene.children).toContain(visual.root);
-    expect(scene.children).toContain(visual.ring);
+    expect(scene.children).toContain(visual.markerRing);
     expect(visual.halo).not.toBeNull();
     expect(visual.halo?.material.map).not.toBeNull();
     expect(visual.light?.intensity).toBe(3.2);
@@ -65,7 +86,7 @@ describe('body visual resources', () => {
     disposeBodyVisual(scene, visual);
 
     expect(scene.children).not.toContain(visual.root);
-    expect(scene.children).not.toContain(visual.ring);
+    expect(scene.children).not.toContain(visual.markerRing);
     expect(geometryDispose).toHaveBeenCalledOnce();
     expect(haloTextureDispose).toHaveBeenCalledOnce();
     expect(materialDispose).toHaveBeenCalledOnce();
@@ -159,5 +180,121 @@ describe('body visual resources', () => {
     expect(visual.halo).toBeNull();
     expect(visual.light).toBeNull();
     disposeBodyVisual(scene, visual);
+  });
+
+  it('异步绑定土星表面和实体环，并让 LOD 切换复用纹理租约', async () => {
+    const scene = new Scene();
+    const resources = new Map<
+      string,
+      LoadedTextureResource & { readonly dispose: ReturnType<typeof vi.fn<() => void>> }
+    >();
+    const loader = vi.fn<TextureAssetLoader>().mockImplementation((descriptor) => {
+      const resource = { dispose: vi.fn<() => void>(), texture: new Texture() };
+      resource.texture.userData.assetId = descriptor.id;
+      resources.set(descriptor.id, resource);
+      return Promise.resolve(resource);
+    });
+    const cache = new TextureAssetCache(loader);
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        bodyId: 'saturn',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        roughness: 0.72,
+        structureKey: 'gas-giant:v1:3',
+        structureSeed: 3,
+        surfaceKind: 'gas-giant',
+        temperatureKelvin: 134,
+      }),
+      'webgpu',
+      false,
+      'low',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+      resolveBodyAssetPlan('saturn'),
+      cache,
+    );
+
+    expect(visual.assetBinding?.diagnostics().surface.state).toBe('idle');
+    expect(visual.planetaryRing).not.toBeNull();
+    visual.assetBinding?.start();
+    await visual.assetBinding?.whenSettled();
+    expect(visual.assetBinding?.diagnostics()).toEqual({
+      ring: { assetId: 'saturn-ring-opacity', bound: true, state: 'ready' },
+      surface: { assetId: 'saturn-surface', bound: true, state: 'ready' },
+    });
+    expect(visual.mesh.material.map?.userData.assetId).toBe('saturn-surface');
+    expect(visual.planetaryRing?.mesh.material.alphaMap?.userData.assetId).toBe(
+      'saturn-ring-opacity',
+    );
+
+    const surfaceTexture = visual.mesh.material.map;
+    updateBodyVisualLod(visual, 'high', 'webgpu');
+    expect(visual.mesh.material.map).toBe(surfaceTexture);
+    expect(loader).toHaveBeenCalledTimes(2);
+
+    disposeBodyVisual(scene, visual);
+    expect(resources.get('saturn-surface')?.dispose).toHaveBeenCalledOnce();
+    expect(resources.get('saturn-ring-opacity')?.dispose).toHaveBeenCalledOnce();
+    cache.dispose();
+  });
+
+  it('加载期间删除天体会中断请求并释放迟到资源', async () => {
+    const scene = new Scene();
+    const pendingByAssetId = new Map<string, Deferred<LoadedTextureResource>>();
+    const signals = new Map<string, AbortSignal>();
+    const loader: TextureAssetLoader = (descriptor, signal) => {
+      const pending = deferred<LoadedTextureResource>();
+      pendingByAssetId.set(descriptor.id, pending);
+      signals.set(descriptor.id, signal);
+      return pending.promise;
+    };
+    const cache = new TextureAssetCache(loader);
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        bodyId: 'saturn',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        roughness: 0.72,
+        structureKey: 'gas-giant:v1:3',
+        structureSeed: 3,
+        surfaceKind: 'gas-giant',
+        temperatureKelvin: 134,
+      }),
+      'webgl2',
+      false,
+      'low',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+      resolveBodyAssetPlan('saturn'),
+      cache,
+    );
+    const surfaceMaterial = visual.mesh.material;
+    const ringMaterial = visual.planetaryRing?.mesh.material;
+
+    visual.assetBinding?.start();
+    await Promise.resolve();
+    disposeBodyVisual(scene, visual);
+    await visual.assetBinding?.whenSettled();
+
+    expect(signals.get('saturn-surface')?.aborted).toBe(true);
+    expect(signals.get('saturn-ring-opacity')?.aborted).toBe(true);
+    const surfaceResource = { dispose: vi.fn<() => void>(), texture: new Texture() };
+    const ringResource = { dispose: vi.fn<() => void>(), texture: new Texture() };
+    pendingByAssetId.get('saturn-surface')?.resolve(surfaceResource);
+    pendingByAssetId.get('saturn-ring-opacity')?.resolve(ringResource);
+    await Promise.resolve();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(surfaceResource.dispose).toHaveBeenCalledOnce();
+    expect(ringResource.dispose).toHaveBeenCalledOnce();
+    expect(surfaceMaterial.map).not.toBe(surfaceResource.texture);
+    expect(ringMaterial?.alphaMap).not.toBe(ringResource.texture);
+    cache.dispose();
   });
 });

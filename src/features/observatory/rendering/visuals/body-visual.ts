@@ -20,21 +20,31 @@ import {
 } from 'three';
 
 import type { BodyAppearanceProfile, BodySurfaceKind } from '../appearance/body-appearance';
+import type { BodyAssetPlan } from '../assets/body-asset-plan';
+import type { TextureAssetCache } from '../assets/texture-cache';
 import type { RendererBackend } from '../create-renderer';
 import { STELLAR_LIGHT_DISTANCE_DECAY, computeScaledStellarLightIntensity } from '../light-scale';
 import { getSphereSegments, type BodyLod } from '../render-scale';
+import { BodyVisualAssetBinding } from './body-visual-assets';
+import {
+  createPlanetaryRingVisual,
+  disposePlanetaryRingVisual,
+  type PlanetaryRingVisual,
+} from './planetary-ring';
 
 type BodySurfaceMaterial = MeshBasicMaterial | MeshStandardMaterial;
 
 export interface BodyVisual {
   appearance: BodyAppearanceProfile;
   appearanceSignature: string;
+  readonly assetBinding: BodyVisualAssetBinding | null;
   readonly bodyId: string;
   readonly halo: Sprite | null;
   readonly light: PointLight | null;
   readonly lightActive: boolean;
+  readonly markerRing: Mesh<RingGeometry, MeshBasicMaterial>;
   readonly mesh: Mesh<SphereGeometry, BodySurfaceMaterial>;
-  readonly ring: Mesh<RingGeometry, MeshBasicMaterial>;
+  readonly planetaryRing: PlanetaryRingVisual | null;
   readonly root: Group;
   readonly structureKey: string;
   readonly surfaceKind: BodySurfaceKind;
@@ -52,7 +62,16 @@ export function createBodyVisual(
   lod: BodyLod,
   lightActive: boolean,
   metersToSceneUnit: number,
+  assetPlan?: BodyAssetPlan,
+  textureCache?: TextureAssetCache,
 ): BodyVisual {
+  if (
+    assetPlan !== undefined &&
+    (assetPlan.surface !== null || assetPlan.ring !== null) &&
+    textureCache === undefined
+  ) {
+    throw new Error('带纹理计划的天体缺少纹理缓存');
+  }
   const geometry = createSphereGeometry(lod, backend);
   applySurfaceVertexColors(geometry, appearance);
   const material = createSurfaceMaterial(appearance);
@@ -63,6 +82,14 @@ export function createBodyVisual(
   const root = new Group();
   root.userData.bodyId = appearance.bodyId;
   root.add(mesh);
+
+  const planetaryRing =
+    assetPlan?.ring === null || assetPlan?.ring === undefined
+      ? null
+      : createPlanetaryRingVisual(assetPlan.ring, backend);
+  if (planetaryRing !== null) {
+    root.add(planetaryRing.mesh);
+  }
 
   const halo = createStarHalo(appearance);
   if (halo !== null) {
@@ -78,7 +105,7 @@ export function createBodyVisual(
   }
   scene.add(root);
 
-  const ringMaterial = new MeshBasicMaterial({
+  const markerRingMaterial = new MeshBasicMaterial({
     blending: AdditiveBlending,
     color: 0x4cc9b0,
     depthTest: false,
@@ -87,24 +114,31 @@ export function createBodyVisual(
     side: DoubleSide,
     transparent: true,
   });
-  const ring = new Mesh(new RingGeometry(0.78, 1, 64), ringMaterial);
-  ring.userData.bodyId = appearance.bodyId;
-  ring.renderOrder = 3;
-  scene.add(ring);
+  const markerRing = new Mesh(new RingGeometry(0.78, 1, 64), markerRingMaterial);
+  markerRing.userData.bodyId = appearance.bodyId;
+  markerRing.renderOrder = 3;
+  scene.add(markerRing);
+
+  const assetBinding =
+    assetPlan === undefined || textureCache === undefined
+      ? null
+      : new BodyVisualAssetBinding(material, planetaryRing, assetPlan, textureCache);
 
   return {
     appearance,
     appearanceSignature: getAppearanceSignature(appearance),
+    assetBinding,
     bodyId: appearance.bodyId,
     halo,
     light,
     lightActive,
     isPrimary,
     lod,
+    markerRing,
     mesh,
     physicalRadiusSceneUnits: 0,
+    planetaryRing,
     projectedRadiusPixels: 0,
-    ring,
     root,
     structureKey: appearance.structureKey,
     surfaceKind: appearance.surfaceKind,
@@ -131,7 +165,9 @@ export function updateBodyVisualAppearance(
     visual.appearanceSignature = appearanceSignature;
   }
   visual.mesh.material.color.setHex(
-    appearance.surfaceKind === 'star' ? 0xffffff : appearance.baseColor,
+    appearance.surfaceKind === 'star' || visual.assetBinding?.hasSurfaceTexture() === true
+      ? 0xffffff
+      : appearance.baseColor,
   );
   if (visual.mesh.material instanceof MeshStandardMaterial) {
     visual.mesh.material.roughness = appearance.roughness;
@@ -169,13 +205,17 @@ export function updateBodyVisualLod(
 }
 
 export function disposeBodyVisual(scene: Scene, visual: BodyVisual): void {
-  scene.remove(visual.root, visual.ring);
+  visual.assetBinding?.dispose();
+  scene.remove(visual.root, visual.markerRing);
   visual.mesh.geometry.dispose();
   visual.mesh.material.dispose();
   visual.halo?.material.map?.dispose();
   visual.halo?.material.dispose();
-  visual.ring.geometry.dispose();
-  visual.ring.material.dispose();
+  if (visual.planetaryRing !== null) {
+    disposePlanetaryRingVisual(visual.planetaryRing);
+  }
+  visual.markerRing.geometry.dispose();
+  visual.markerRing.material.dispose();
   visual.light?.dispose();
   visual.root.clear();
 }

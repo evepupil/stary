@@ -98,7 +98,11 @@ async function expectRenderedCanvas(page: Page): Promise<void> {
   expect(visiblePixelCount, '画布中央区域缺少可见场景像素').toBeGreaterThan(96);
 }
 
-async function expectSelectedOrbitPixels(page: Page): Promise<void> {
+async function expectSelectedOrbitPixels(
+  page: Page,
+  minimumPixelCount: number,
+  message: string,
+): Promise<void> {
   const { canvas, screenshot } = await captureRenderedCanvas(page);
   const canvasBox = await canvas.boundingBox();
   expect(canvasBox).not.toBeNull();
@@ -135,9 +139,7 @@ async function expectSelectedOrbitPixels(page: Page): Promise<void> {
     }
   }
 
-  expect(selectedOrbitPixelCount, '聚焦海王星后缺少青绿色选中轨道像素').toBeGreaterThan(
-    Math.ceil(Math.min(screenshot.width, screenshot.height) * 0.15),
-  );
+  expect(selectedOrbitPixelCount, message).toBeGreaterThan(minimumPixelCount);
 }
 
 async function expectInitializedRendererBackend(page: Page): Promise<void> {
@@ -447,7 +449,7 @@ test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', asyn
         vectorDistance(overviewCameraState.position, overviewCameraState.target),
     ),
   ).toBeGreaterThan(1);
-  await expectSelectedOrbitPixels(page);
+  await expectSelectedOrbitPixels(page, 8, '海王星表面近景中缺少青绿色选中轨道像素');
 
   await page.getByRole('button', { name: '返回太阳系全景' }).click();
   await expect(observatory).toHaveAttribute('data-view-mode', 'overview');
@@ -462,6 +464,13 @@ test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', asyn
     )
     .toBe('1');
   await expect.poll(async () => (await readCameraState(diagnosticCanvas)).mode).toBe('overview');
+  const overviewCanvasBox = await diagnosticCanvas.boundingBox();
+  expect(overviewCanvasBox).not.toBeNull();
+  await expectSelectedOrbitPixels(
+    page,
+    Math.ceil(Math.min(overviewCanvasBox?.width ?? 0, overviewCanvasBox?.height ?? 0) * 0.15),
+    '返回全景后缺少完整的青绿色选中轨道',
+  );
 
   const clickedPlanet = await clickIsolatedOuterPlanet(page);
   await expect(observatory).toHaveAttribute('data-view-mode', 'focus');
