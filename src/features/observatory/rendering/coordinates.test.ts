@@ -4,8 +4,10 @@ import type { BodyState } from '../../../physics/protocol/schemas';
 import {
   computeMetersToSceneUnit,
   computePositionRingRadius,
+  computeScenePhysicalExtentMeters,
   physicalRadiusToSceneUnits,
   positionMetersToScene,
+  shouldRecomputeSceneScale,
 } from './coordinates';
 
 function body(id: string, x: number, radiusMeters: number): BodyState {
@@ -36,6 +38,15 @@ describe('observatory coordinate projection', () => {
     expect(computeMetersToSceneUnit([], 10)).toBe(1);
   });
 
+  it('物理范围只在明显扩大或缩小时触发场景重标定', () => {
+    expect(computeScenePhysicalExtentMeters([body('near', 20, 1), body('far', -50, 1)])).toBe(50);
+    expect(shouldRecomputeSceneScale(100, 104)).toBe(false);
+    expect(shouldRecomputeSceneScale(100, 106)).toBe(true);
+    expect(shouldRecomputeSceneScale(100, 50)).toBe(false);
+    expect(shouldRecomputeSceneScale(100, 49)).toBe(true);
+    expect(shouldRecomputeSceneScale(0, 1)).toBe(true);
+  });
+
   it('球体保留物理半径，定位环单独应用可见下限', () => {
     expect(physicalRadiusToSceneUnits(2, 0.1)).toBeCloseTo(0.2);
     expect(computePositionRingRadius(0.2, 0.5)).toBe(0.5);
@@ -48,5 +59,6 @@ describe('observatory coordinate projection', () => {
       'metersToSceneUnit',
     );
     expect(() => computePositionRingRadius(-1, 1)).toThrow('physicalRadiusSceneUnits');
+    expect(() => shouldRecomputeSceneScale(-1, 1)).toThrow('previousExtentMeters');
   });
 });

@@ -8,14 +8,7 @@ export interface ScenePosition {
   readonly z: number;
 }
 
-export function computeMetersToSceneUnit(
-  bodies: readonly BodyState[],
-  sceneExtent = DEFAULT_SCENE_EXTENT,
-): number {
-  if (!Number.isFinite(sceneExtent) || sceneExtent <= 0) {
-    throw new RangeError('sceneExtent 必须是正有限数');
-  }
-
+export function computeScenePhysicalExtentMeters(bodies: readonly BodyState[]): number {
   let furthestDistanceMeters = 0;
   let largestRadiusMeters = 0;
 
@@ -25,8 +18,38 @@ export function computeMetersToSceneUnit(
     largestRadiusMeters = Math.max(largestRadiusMeters, body.radiusMeters);
   }
 
-  const physicalExtentMeters = Math.max(furthestDistanceMeters, largestRadiusMeters);
+  return Math.max(furthestDistanceMeters, largestRadiusMeters);
+}
+
+export function computeMetersToSceneUnit(
+  bodies: readonly BodyState[],
+  sceneExtent = DEFAULT_SCENE_EXTENT,
+): number {
+  if (!Number.isFinite(sceneExtent) || sceneExtent <= 0) {
+    throw new RangeError('sceneExtent 必须是正有限数');
+  }
+
+  const physicalExtentMeters = computeScenePhysicalExtentMeters(bodies);
   return physicalExtentMeters > 0 ? sceneExtent / physicalExtentMeters : 1;
+}
+
+export function shouldRecomputeSceneScale(
+  previousExtentMeters: number,
+  nextExtentMeters: number,
+): boolean {
+  if (!Number.isFinite(previousExtentMeters) || previousExtentMeters < 0) {
+    throw new RangeError('previousExtentMeters 必须是非负有限数');
+  }
+  if (!Number.isFinite(nextExtentMeters) || nextExtentMeters < 0) {
+    throw new RangeError('nextExtentMeters 必须是非负有限数');
+  }
+  if (previousExtentMeters === 0 || nextExtentMeters === 0) {
+    return previousExtentMeters !== nextExtentMeters;
+  }
+
+  return (
+    nextExtentMeters > previousExtentMeters * 1.05 || nextExtentMeters < previousExtentMeters * 0.5
+  );
 }
 
 export function positionMetersToScene(

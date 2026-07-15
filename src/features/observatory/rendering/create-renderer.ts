@@ -3,6 +3,7 @@ import type { Camera, Object3D, ToneMapping, WebGLRenderer } from 'three';
 export type RendererBackend = 'webgpu' | 'webgl2';
 type WebGpuRenderer = InstanceType<(typeof import('three/webgpu'))['WebGPURenderer']>;
 export type ObservatoryRenderer = WebGLRenderer | WebGpuRenderer;
+export const OBSERVATORY_TONE_MAPPING_EXPOSURE = 1.1;
 
 export interface CreatedObservatoryRenderer {
   readonly backend: RendererBackend;
@@ -93,7 +94,7 @@ function configureRenderer(
 ): void {
   renderer.outputColorSpace = outputColorSpace;
   renderer.toneMapping = toneMapping;
-  renderer.toneMappingExposure = 1;
+  renderer.toneMappingExposure = OBSERVATORY_TONE_MAPPING_EXPOSURE;
   renderer.setClearColor(0x030506, 1);
 }
 
