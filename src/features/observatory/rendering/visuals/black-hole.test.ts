@@ -5,6 +5,7 @@ import {
   createBlackHoleTextureData,
   createBlackHoleVisual,
   disposeBlackHoleVisual,
+  snapshotBlackHoleTexturePool,
   updateBlackHoleScale,
   updateBlackHoleVisibility,
 } from './black-hole';
@@ -61,6 +62,7 @@ describe('black hole visual', () => {
     const haloTextureDispose = vi.fn();
     expect(first.photonRingTexture).toBe(second.photonRingTexture);
     expect(first.haloTexture).toBe(second.haloTexture);
+    expect(snapshotBlackHoleTexturePool()).toEqual({ entries: 2, references: 4 });
     first.photonRingSprite.material.addEventListener('dispose', photonMaterialDispose);
     first.photonRingTexture.addEventListener('dispose', photonTextureDispose);
     first.haloSprite?.material.addEventListener('dispose', haloMaterialDispose);
@@ -73,10 +75,12 @@ describe('black hole visual', () => {
     expect(haloMaterialDispose).toHaveBeenCalledOnce();
     expect(photonTextureDispose).not.toHaveBeenCalled();
     expect(haloTextureDispose).not.toHaveBeenCalled();
+    expect(snapshotBlackHoleTexturePool()).toEqual({ entries: 2, references: 2 });
 
     disposeBlackHoleVisual(second);
 
     expect(photonTextureDispose).toHaveBeenCalledOnce();
     expect(haloTextureDispose).toHaveBeenCalledOnce();
+    expect(snapshotBlackHoleTexturePool()).toEqual({ entries: 0, references: 0 });
   });
 });

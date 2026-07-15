@@ -74,6 +74,11 @@ import {
 } from './lighting/stellar-occlusion';
 import { sampleOsculatingOrbit } from './orbit';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
+import {
+  recordSceneCreated,
+  recordSceneDisposed,
+  snapshotRenderLifecycle,
+} from './render-lifecycle-diagnostics';
 import { resolveBodyAppearance, selectActiveStellarLightIds } from './appearance/body-appearance';
 import {
   pickNearestScreenMarker,
@@ -88,13 +93,18 @@ import {
   selectRenderScaleTier,
   type RenderScaleTier,
 } from './render-scale';
+import { collectSceneResourceCounts } from './scene-resource-counts';
 import {
   updateBodyEnvironmentLighting,
   updateBodyEnvironmentScale,
   updateBodyEnvironmentTime,
   updateBodyEnvironmentVisibility,
 } from './visuals/body-environment';
-import { updateBlackHoleScale, updateBlackHoleVisibility } from './visuals/black-hole';
+import {
+  snapshotBlackHoleTexturePool,
+  updateBlackHoleScale,
+  updateBlackHoleVisibility,
+} from './visuals/black-hole';
 import {
   createBodyVisual,
   disposeBodyVisual,
@@ -295,6 +305,7 @@ export class ObservatoryScene {
       this.resizeObserver.observe(this.mount);
       this.resize();
       this.animationFrame = requestAnimationFrame(this.renderFrame);
+      recordSceneCreated();
     } catch (error) {
       this.rollbackConstruction();
       throw error;
@@ -490,6 +501,7 @@ export class ObservatoryScene {
     this.creationBodyVisuals.clear();
     this.creationTrajectoryVisuals.clear();
     this.creationCameraSnapshot = null;
+    recordSceneDisposed();
   }
 
   private readonly updateBodyVisualTransform = (visual: BodyVisual, body: BodyState): void => {
@@ -1744,9 +1756,12 @@ export class ObservatoryScene {
           (visual.blackHole === null ? 0 : 1 + (visual.blackHole.haloSprite === null ? 0 : 1)),
         0,
       ),
+      blackHoleTexturePool: snapshotBlackHoleTexturePool(),
       planetaryRingMeshes: [...this.bodyVisuals.values()].filter(
         (visual) => visual.planetaryRing !== null,
       ).length,
+      sceneGraph: collectSceneResourceCounts(this.scene),
+      lifecycle: snapshotRenderLifecycle(),
       textureCache: this.textureCache.snapshot(),
     });
     const width = Math.max(1, this.mount.clientWidth);

@@ -142,6 +142,12 @@ const workerFiles = relativeFiles.filter(
 if (workerFiles.length !== 1) {
   throw new Error(`应产出一个正式物理模块 Worker，实际为 ${workerFiles.length} 个`);
 }
+const orbitPreviewWorkerFiles = relativeFiles.filter((file) =>
+  /^orbit-preview\.worker-[^/]+\.js$/.test(path.posix.basename(file)),
+);
+if (orbitPreviewWorkerFiles.length !== 1) {
+  throw new Error(`应产出一个轨道预览模块 Worker，实际为 ${orbitPreviewWorkerFiles.length} 个`);
+}
 if (relativeFiles.some((file) => file.includes('foundation.worker'))) {
   throw new Error('生产构建仍包含旧 foundation Worker');
 }
@@ -160,6 +166,10 @@ const sourceGlue = await readFile(sourceGluePath);
 const sourceWasm = await readFile(sourceWasmPath);
 const builtWasm = await readFile(path.join(distDirectory, wasmFiles[0]));
 const builtWorker = await readFile(path.join(distDirectory, workerFiles[0]), 'utf8');
+const builtOrbitPreviewWorker = await readFile(
+  path.join(distDirectory, orbitPreviewWorkerFiles[0]),
+  'utf8',
+);
 assertLockedWasm('正式层使用的 REBOUND 胶水模块', sourceGlue, lockedGlueArtifact);
 assertLockedWasm('原型 REBOUND WASM', sourceWasm, lockedWasmArtifact);
 assertLockedWasm('生产 REBOUND WASM', builtWasm, lockedWasmArtifact);
@@ -169,6 +179,30 @@ if (!builtWorker.includes('_stary_reb_create') || !builtWorker.includes('_stary_
 const builtWasmFileName = path.posix.basename(wasmFiles[0]);
 if (!builtWorker.includes(builtWasmFileName)) {
   throw new Error(`正式物理 Worker 没有引用唯一 REBOUND WASM 产物 ${builtWasmFileName}`);
+}
+if (!builtOrbitPreviewWorker.includes(builtWasmFileName)) {
+  throw new Error(`轨道预览 Worker 没有引用唯一 REBOUND WASM 产物 ${builtWasmFileName}`);
+}
+const orbitPreviewWorkerMarkers = [
+  '_stary_reb_create',
+  '_stary_reb_integrate',
+  'trajectoryPreviewRequest',
+  'trajectoryPreviewResult',
+  'trajectoryPreviewError',
+  'requestId',
+  'draftRevision',
+  'durationSeconds',
+  'sampleCount',
+  'tracks',
+  'risk',
+];
+const missingOrbitPreviewWorkerMarkers = orbitPreviewWorkerMarkers.filter(
+  (marker) => !builtOrbitPreviewWorker.includes(marker),
+);
+if (missingOrbitPreviewWorkerMarkers.length > 0) {
+  throw new Error(
+    `轨道预览 Worker 缺少 REBOUND 或预览协议关键内容: ${missingOrbitPreviewWorkerMarkers.join(', ')}`,
+  );
 }
 
 const dynamicImports = manifest['index.html']?.dynamicImports;

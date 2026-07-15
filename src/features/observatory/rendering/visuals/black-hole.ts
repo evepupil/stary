@@ -25,6 +25,11 @@ export interface BlackHoleVisual {
   readonly profile: BlackHoleVisualProfile;
 }
 
+export interface BlackHoleTexturePoolSnapshot {
+  readonly entries: number;
+  readonly references: number;
+}
+
 const TEXTURE_SIZE = 256;
 const disposedBlackHoleVisuals = new WeakSet<BlackHoleVisual>();
 const sharedBlackHoleTextures = new Map<
@@ -116,6 +121,16 @@ export function disposeBlackHoleVisual(visual: BlackHoleVisual): void {
     releaseBlackHoleTexture(visual.profile, true, visual.haloTexture);
   }
   visual.group.clear();
+}
+
+export function snapshotBlackHoleTexturePool(): BlackHoleTexturePoolSnapshot {
+  return {
+    entries: sharedBlackHoleTextures.size,
+    references: [...sharedBlackHoleTextures.values()].reduce(
+      (total, entry) => total + entry.references,
+      0,
+    ),
+  };
 }
 
 export function createBlackHoleTextureData(

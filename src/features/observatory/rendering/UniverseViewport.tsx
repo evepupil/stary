@@ -8,6 +8,7 @@ import {
   type ObservatoryRenderer,
   type RendererBackend,
 } from './create-renderer';
+import { loadObservatoryScene } from './observatory-scene-loader';
 import type { ObservatoryScene } from './observatory-scene';
 import './universe-viewport.css';
 
@@ -100,7 +101,7 @@ export function UniverseViewport({
       return createdRenderer;
     });
 
-    void Promise.all([rendererPromise, import('./observatory-scene')])
+    void Promise.all([rendererPromise, loadObservatoryScene()])
       .then(([{ backend, renderer }, { ObservatoryScene }]) => {
         if (cancelled) {
           disposeObservatoryRenderer(renderer);

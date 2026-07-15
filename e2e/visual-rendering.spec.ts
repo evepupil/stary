@@ -1053,6 +1053,7 @@ test('地球纹理失败时保留可选择和可聚焦的程序化回退', async
   await expectVisualFoundation(page);
   const canvas = page.locator('canvas[data-renderer-backend]');
   await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
+  await waitForCameraTransition(canvas, 'earth');
   await expect
     .poll(async () => {
       const resources = await readJsonAttribute<VisualResourceDiagnostic[]>(
@@ -1084,6 +1085,8 @@ test('地球云图失败时保留可移动的程序化云层', async ({ page }) 
   await expectVisualFoundation(page);
   const canvas = page.locator('canvas[data-renderer-backend]');
   await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
+  await waitForCameraTransition(canvas, 'earth');
+  await expect(canvas).toHaveAttribute('data-render-scale-tier', 'surface');
   await expectSurfaceResource(canvas, 'earth', 'earth-surface');
   await expectEarthEnvironmentResources(canvas, 'fallback');
   await expectEarthSurfacePixels(canvas);

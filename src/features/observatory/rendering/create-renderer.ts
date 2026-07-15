@@ -1,9 +1,12 @@
 import type { Camera, Object3D, ToneMapping, WebGLRenderer } from 'three';
 
+import { recordRendererCreated, recordRendererDisposed } from './render-lifecycle-diagnostics';
+
 export type RendererBackend = 'webgpu' | 'webgl2';
 type WebGpuRenderer = InstanceType<(typeof import('three/webgpu'))['WebGPURenderer']>;
 export type ObservatoryRenderer = WebGLRenderer | WebGpuRenderer;
 export const OBSERVATORY_TONE_MAPPING_EXPOSURE = 1.1;
+const disposedRenderers = new WeakSet<ObservatoryRenderer>();
 
 export interface CreatedObservatoryRenderer {
   readonly backend: RendererBackend;
@@ -29,6 +32,7 @@ export async function createObservatoryRenderer(): Promise<CreatedObservatoryRen
         });
         await candidate.init();
         configureRenderer(candidate, SRGBColorSpace, ACESFilmicToneMapping);
+        recordRendererCreated();
 
         return {
           backend: hasWebGpuBackend(candidate) ? 'webgpu' : 'webgl2',
@@ -63,6 +67,7 @@ export async function createObservatoryRenderer(): Promise<CreatedObservatoryRen
       powerPreference: 'high-performance',
     });
     configureRenderer(renderer, SRGBColorSpace, ACESFilmicToneMapping);
+    recordRendererCreated();
     return { backend: 'webgl2', renderer };
   } catch (error) {
     throw new Error(
@@ -73,10 +78,15 @@ export async function createObservatoryRenderer(): Promise<CreatedObservatoryRen
 }
 
 export function disposeObservatoryRenderer(renderer: ObservatoryRenderer): void {
+  if (disposedRenderers.has(renderer)) {
+    return;
+  }
+  disposedRenderers.add(renderer);
   renderer.dispose();
   if ('forceContextLoss' in renderer) {
     renderer.forceContextLoss();
   }
+  recordRendererDisposed();
 }
 
 export function renderObservatoryFrame(
