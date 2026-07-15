@@ -5,6 +5,7 @@ import {
   applyCreationCameraView,
   captureCreationCameraState,
   computeCreationCameraView,
+  rescaleStoredCreationCameraState,
   restoreCreationCameraState,
   type CreationCameraControls,
 } from './creation-camera';
@@ -52,5 +53,26 @@ describe('creation camera', () => {
     expect(camera.far).toBe(stored.far);
     expect(controls.minDistance).toBe(stored.minDistance);
     expect(controls.maxDistance).toBe(stored.maxDistance);
+  });
+
+  it('场景比例变化时同比缩放保存的聚焦构图并保留朝向', () => {
+    const camera = new PerspectiveCamera(45, 16 / 9, 0.25, 900);
+    camera.position.set(18, 4, 2);
+    const controls = createControls();
+    camera.lookAt(controls.target);
+    const stored = captureCreationCameraState(camera, controls);
+
+    const scaled = rescaleStoredCreationCameraState(stored, 0.25);
+
+    expect(scaled.position.toArray()).toEqual([4.5, 1, 0.5]);
+    expect(scaled.target.toArray()).toEqual([0.75, -0.5, 0.25]);
+    expect(scaled.near).toBe(stored.near * 0.25);
+    expect(scaled.far).toBe(stored.far * 0.25);
+    expect(scaled.minDistance).toBe(stored.minDistance * 0.25);
+    expect(scaled.maxDistance).toBe(stored.maxDistance * 0.25);
+    expect(scaled.quaternion.angleTo(stored.quaternion)).toBeCloseTo(0, 12);
+    expect(scaled.up.toArray()).toEqual(stored.up.toArray());
+    expect(stored.position.toArray()).toEqual([18, 4, 2]);
+    expect(() => rescaleStoredCreationCameraState(stored, 0)).toThrow('scaleRatio');
   });
 });

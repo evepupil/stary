@@ -88,4 +88,38 @@ describe('sampleOsculatingOrbit', () => {
 
     expect(sampleOsculatingOrbit(primary, body, 1)).toBeNull();
   });
+
+  it('减去巨大渲染原点后保留相同的相对轨道形状', () => {
+    const [sun, earth] = createCircularSunEarthScenario().bodies as readonly [BodyState, BodyState];
+    const offset = { x: 4.5e15, y: -3.2e15, z: 7.5e14 };
+    const shiftedSun = {
+      ...sun,
+      positionMeters: {
+        x: sun.positionMeters.x + offset.x,
+        y: sun.positionMeters.y + offset.y,
+        z: sun.positionMeters.z + offset.z,
+      },
+    };
+    const shiftedEarth = {
+      ...earth,
+      positionMeters: {
+        x: earth.positionMeters.x + offset.x,
+        y: earth.positionMeters.y + offset.y,
+        z: earth.positionMeters.z + offset.z,
+      },
+    };
+    const baseline = sampleOsculatingOrbit(sun, earth, 1e-10, 64, sun.positionMeters);
+    const shifted = sampleOsculatingOrbit(
+      shiftedSun,
+      shiftedEarth,
+      1e-10,
+      64,
+      shiftedSun.positionMeters,
+    );
+
+    expect(shifted).not.toBeNull();
+    expect(baseline).not.toBeNull();
+    expect(shifted?.[0]?.x).toBeCloseTo(baseline?.[0]?.x ?? 0, 4);
+    expect(shifted?.[16]?.y).toBeCloseTo(baseline?.[16]?.y ?? 0, 4);
+  });
 });

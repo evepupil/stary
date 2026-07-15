@@ -1,4 +1,4 @@
-import type { BodyState } from '../../../physics/protocol/schemas';
+import type { BodyState, PositionMeters } from '../../../physics/protocol/schemas';
 import {
   DEFAULT_SCENE_EXTENT,
   physicalRadiusToSceneUnits,
@@ -6,6 +6,7 @@ import {
 } from './coordinates';
 import { computeCameraFitDistance } from './camera-fit';
 import type { ScenePosition } from './coordinates';
+import type { RenderScaleTier } from './render-scale';
 
 const MINIMUM_FOCUS_HALF_EXTENT = 0.001;
 const FOCUS_PAIR_PADDING = 1.32;
@@ -16,6 +17,8 @@ export interface ObservatoryCameraFrame {
   readonly target: ScenePosition;
   readonly halfExtent: number;
   readonly distance: number;
+  readonly minimumDistance: number;
+  readonly tier: RenderScaleTier;
 }
 
 export function computeOverviewCameraFrame(
@@ -26,6 +29,8 @@ export function computeOverviewCameraFrame(
     target: { x: 0, y: 0, z: 0 },
     halfExtent: sceneHalfExtent,
     distance: computeCameraFitDistance(sceneHalfExtent, aspect),
+    minimumDistance: Math.max(1e-5, sceneHalfExtent * 0.05),
+    tier: 'system',
   };
 }
 
@@ -34,8 +39,9 @@ export function computeFocusCameraFrame(
   parent: BodyState | null,
   metersToSceneUnit: number,
   aspect: number,
+  originMeters: PositionMeters = { x: 0, y: 0, z: 0 },
 ): ObservatoryCameraFrame {
-  const bodyPosition = positionMetersToScene(body.positionMeters, metersToSceneUnit);
+  const bodyPosition = positionMetersToScene(body.positionMeters, metersToSceneUnit, originMeters);
   const bodyRadius = physicalRadiusToSceneUnits(body.radiusMeters, metersToSceneUnit);
 
   if (parent === null) {
@@ -44,10 +50,16 @@ export function computeFocusCameraFrame(
       target: bodyPosition,
       halfExtent,
       distance: computeCameraFitDistance(halfExtent, aspect),
+      minimumDistance: Math.max(1e-9, bodyRadius * 1.03),
+      tier: 'orbit',
     };
   }
 
-  const parentPosition = positionMetersToScene(parent.positionMeters, metersToSceneUnit);
+  const parentPosition = positionMetersToScene(
+    parent.positionMeters,
+    metersToSceneUnit,
+    originMeters,
+  );
   const parentRadius = physicalRadiusToSceneUnits(parent.radiusMeters, metersToSceneUnit);
   const target = {
     x: (bodyPosition.x + parentPosition.x) / 2,
@@ -73,6 +85,8 @@ export function computeFocusCameraFrame(
     target,
     halfExtent,
     distance: computeCameraFitDistance(halfExtent, aspect),
+    minimumDistance: Math.max(1e-9, Math.max(bodyRadius, parentRadius) * 1.03),
+    tier: 'orbit',
   };
 }
 
@@ -81,17 +95,21 @@ export function computeBodyInspectionCameraFrame(
   metersToSceneUnit: number,
   aspect: number,
   outerRadiusRatio = 1,
+  originMeters: PositionMeters = { x: 0, y: 0, z: 0 },
 ): ObservatoryCameraFrame {
   if (!Number.isFinite(outerRadiusRatio) || outerRadiusRatio <= 0) {
     throw new RangeError('outerRadiusRatio 必须是正有限数');
   }
-  const target = positionMetersToScene(body.positionMeters, metersToSceneUnit);
+  const target = positionMetersToScene(body.positionMeters, metersToSceneUnit, originMeters);
   const bodyRadius = physicalRadiusToSceneUnits(body.radiusMeters, metersToSceneUnit);
-  const halfExtent = Math.max(1e-9, bodyRadius * outerRadiusRatio * 2.1);
+  const observableRadius = bodyRadius * outerRadiusRatio;
+  const halfExtent = Math.max(1e-12, observableRadius * 2.1);
   return {
     target,
     halfExtent,
     distance: computeCameraFitDistance(halfExtent, aspect),
+    minimumDistance: Math.max(1e-12, observableRadius * 1.03),
+    tier: 'surface',
   };
 }
 

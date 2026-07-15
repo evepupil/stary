@@ -33,6 +33,27 @@ interface CameraState {
   readonly target: { readonly x: number; readonly y: number; readonly z: number };
 }
 
+interface VisualCameraState {
+  readonly distance: number;
+  readonly position: { readonly x: number; readonly y: number; readonly z: number };
+  readonly target: { readonly x: number; readonly y: number; readonly z: number };
+  readonly transitionActive: boolean;
+  readonly transitionEndTarget: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  } | null;
+}
+
+interface VisualOriginState {
+  readonly bodyId: string | null;
+  readonly focusedLocalPosition: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  } | null;
+}
+
 function collectBrowserDiagnostics(page: Page): string[] {
   const diagnostics: string[] = [];
   page.on('console', (message) => {
@@ -213,6 +234,34 @@ async function readCameraState(canvas: Locator): Promise<CameraState> {
   return parsed;
 }
 
+async function readVisualCameraState(canvas: Locator): Promise<VisualCameraState> {
+  const serialized = await canvas.getAttribute('data-visual-camera-state');
+  if (serialized === null) {
+    throw new Error('canvas 缺少 data-visual-camera-state');
+  }
+  const parsed: unknown = JSON.parse(serialized);
+  if (!isVisualCameraState(parsed)) {
+    throw new Error('data-visual-camera-state 无效');
+  }
+  return parsed;
+}
+
+async function readVisualOriginState(canvas: Locator): Promise<VisualOriginState> {
+  const serialized = await canvas.getAttribute('data-visual-origin-state');
+  if (serialized === null) {
+    throw new Error('canvas 缺少 data-visual-origin-state');
+  }
+  const parsed: unknown = JSON.parse(serialized);
+  if (!isVisualOriginState(parsed)) {
+    throw new Error('data-visual-origin-state 无效');
+  }
+  return parsed;
+}
+
+async function waitForCameraTransition(canvas: Locator): Promise<void> {
+  await expect.poll(async () => (await readVisualCameraState(canvas)).transitionActive).toBe(false);
+}
+
 function isCameraState(candidate: unknown): candidate is CameraState {
   if (typeof candidate !== 'object' || candidate === null) {
     return false;
@@ -222,6 +271,32 @@ function isCameraState(candidate: unknown): candidate is CameraState {
     (record.mode === 'focus' || record.mode === 'overview') &&
     isFiniteVector(record.position) &&
     isFiniteVector(record.target)
+  );
+}
+
+function isVisualCameraState(candidate: unknown): candidate is VisualCameraState {
+  if (typeof candidate !== 'object' || candidate === null) {
+    return false;
+  }
+  const record = candidate as Record<string, unknown>;
+  return (
+    typeof record.distance === 'number' &&
+    Number.isFinite(record.distance) &&
+    isFiniteVector(record.position) &&
+    isFiniteVector(record.target) &&
+    typeof record.transitionActive === 'boolean' &&
+    (record.transitionEndTarget === null || isFiniteVector(record.transitionEndTarget))
+  );
+}
+
+function isVisualOriginState(candidate: unknown): candidate is VisualOriginState {
+  if (typeof candidate !== 'object' || candidate === null) {
+    return false;
+  }
+  const record = candidate as Record<string, unknown>;
+  return (
+    (typeof record.bodyId === 'string' || record.bodyId === null) &&
+    (record.focusedLocalPosition === null || isFiniteVector(record.focusedLocalPosition))
   );
 }
 
@@ -240,6 +315,21 @@ function vectorDistance(
   right: { readonly x: number; readonly y: number; readonly z: number },
 ): number {
   return Math.hypot(left.x - right.x, left.y - right.y, left.z - right.z);
+}
+
+function cameraDirection(state: VisualCameraState): readonly [number, number, number] {
+  const x = state.position.x - state.target.x;
+  const y = state.position.y - state.target.y;
+  const z = state.position.z - state.target.z;
+  const length = Math.hypot(x, y, z);
+  return [x / length, y / length, z / length];
+}
+
+function dotProduct(
+  left: readonly [number, number, number],
+  right: readonly [number, number, number],
+): number {
+  return left[0] * right[0] + left[1] * right[1] + left[2] * right[2];
 }
 
 function isVisibleBodyMarker(candidate: unknown): candidate is VisibleBodyMarker {
@@ -402,7 +492,7 @@ test('场景模块延迟加载时保留用户的海王星聚焦请求', async ({
     await route.continue();
   });
 
-  await page.goto('/?markerDiagnostics=1');
+  await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
   await page.getByRole('button', { name: '聚焦海王星' }).click();
   await expect(page.locator('main.observatory-shell')).toHaveAttribute('data-view-mode', 'focus');
   const canvas = page.locator('canvas[data-renderer-backend]');
@@ -415,7 +505,7 @@ test('场景模块延迟加载时保留用户的海王星聚焦请求', async ({
 test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', async ({ page }) => {
   const browserDiagnostics = collectBrowserDiagnostics(page);
 
-  await page.goto('/?markerDiagnostics=1');
+  await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
 
   await expect(page).toHaveTitle('STARY');
   const observatory = page.locator('main.observatory-shell');
@@ -441,8 +531,16 @@ test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', asyn
   await expect(page.locator('aside[aria-label="天体数据"]')).toContainText('海王星');
   await expect(page.getByRole('button', { name: '返回太阳系全景' })).toBeVisible();
   await expect.poll(async () => (await readCameraState(diagnosticCanvas)).mode).toBe('focus');
+  await waitForCameraTransition(diagnosticCanvas);
   const focusCameraState = await readCameraState(diagnosticCanvas);
-  expect(vectorDistance(focusCameraState.target, overviewCameraState.target)).toBeGreaterThan(1);
+  const focusOriginState = await readVisualOriginState(diagnosticCanvas);
+  expect(focusOriginState.bodyId).toBe('neptune');
+  expect(focusOriginState.focusedLocalPosition).not.toBeNull();
+  if (focusOriginState.focusedLocalPosition !== null) {
+    expect(
+      vectorDistance(focusOriginState.focusedLocalPosition, { x: 0, y: 0, z: 0 }),
+    ).toBeLessThan(1e-8);
+  }
   expect(
     Math.abs(
       vectorDistance(focusCameraState.position, focusCameraState.target) -
@@ -464,6 +562,8 @@ test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', asyn
     )
     .toBe('1');
   await expect.poll(async () => (await readCameraState(diagnosticCanvas)).mode).toBe('overview');
+  await waitForCameraTransition(diagnosticCanvas);
+  expect((await readVisualOriginState(diagnosticCanvas)).bodyId).toBeNull();
   const overviewCanvasBox = await diagnosticCanvas.boundingBox();
   expect(overviewCanvasBox).not.toBeNull();
   await expectSelectedOrbitPixels(
@@ -498,6 +598,81 @@ test('生产观测台渲染太阳系 10 体并完成聚焦和时间控制', asyn
   await expect(page.getByText('相对漂移', { exact: false }).first()).toBeVisible();
 
   expect(browserDiagnostics, '页面存在 console warning/error 或未处理异常').toEqual([]);
+});
+
+test('用户缩放后的聚焦镜头在连续 Worker 快照中保持距离和方向', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+
+  await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
+  await expect(page.getByText('模拟运行中')).toBeVisible({ timeout: 30_000 });
+  const observatory = page.locator('main.observatory-shell');
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await expect(canvas).toBeVisible({ timeout: 30_000 });
+
+  const simulationTimeBeforeFocus = Number(
+    await observatory.getAttribute('data-simulation-time-seconds'),
+  );
+  await page.getByRole('button', { name: '聚焦海王星' }).click();
+  await expect
+    .poll(
+      async () => {
+        const simulationTime = Number(
+          await observatory.getAttribute('data-simulation-time-seconds'),
+        );
+        const state = await readVisualCameraState(canvas);
+        if (
+          simulationTime <= simulationTimeBeforeFocus ||
+          !state.transitionActive ||
+          state.transitionEndTarget === null
+        ) {
+          return Number.POSITIVE_INFINITY;
+        }
+        return vectorDistance(state.transitionEndTarget, { x: 0, y: 0, z: 0 });
+      },
+      { intervals: [10, 20, 40, 80], timeout: 2_000 },
+    )
+    .toBeLessThan(1e-8);
+  await waitForCameraTransition(canvas);
+  const initialState = await readVisualCameraState(canvas);
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox).not.toBeNull();
+  if (canvasBox === null) {
+    return;
+  }
+
+  await page.mouse.move(canvasBox.x + canvasBox.width / 2, canvasBox.y + canvasBox.height / 2);
+  await page.mouse.wheel(0, 900);
+  await expect
+    .poll(async () => {
+      const distance = (await readVisualCameraState(canvas)).distance;
+      return Math.abs(distance - initialState.distance) / initialState.distance;
+    })
+    .toBeGreaterThan(0.05);
+  await page.waitForTimeout(500);
+
+  const zoomedState = await readVisualCameraState(canvas);
+  expect(
+    Math.abs(zoomedState.distance - initialState.distance) / initialState.distance,
+  ).toBeGreaterThan(0.05);
+  const simulationTimeAtZoom = Number(
+    await observatory.getAttribute('data-simulation-time-seconds'),
+  );
+  await expect
+    .poll(async () => Number(await observatory.getAttribute('data-simulation-time-seconds')), {
+      timeout: 5_000,
+    })
+    .toBeGreaterThan(simulationTimeAtZoom + 10_000);
+
+  const stateAfterSnapshots = await readVisualCameraState(canvas);
+  expect(
+    Math.abs(stateAfterSnapshots.distance - zoomedState.distance) / zoomedState.distance,
+    'Worker 快照重置了用户缩放距离',
+  ).toBeLessThan(0.005);
+  expect(
+    dotProduct(cameraDirection(zoomedState), cameraDirection(stateAfterSnapshots)),
+    'Worker 快照改变了用户相机方向',
+  ).toBeGreaterThan(0.9999);
+  expect(browserDiagnostics, '缩放保持流程存在 console warning/error').toEqual([]);
 });
 
 test('手机视口可从滚动目录选择海王星并安全关闭数据抽屉', async ({ page }) => {

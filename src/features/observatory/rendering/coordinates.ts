@@ -8,6 +8,14 @@ export interface ScenePosition {
   readonly z: number;
 }
 
+export interface SceneReprojectionOptions {
+  readonly nextMetersToSceneUnit: number;
+  readonly nextOriginMeters: PositionMeters;
+  readonly originTracksSameBody: boolean;
+  readonly previousMetersToSceneUnit: number;
+  readonly previousOriginMeters: PositionMeters;
+}
+
 export function computeScenePhysicalExtentMeters(bodies: readonly BodyState[]): number {
   let furthestDistanceMeters = 0;
   let largestRadiusMeters = 0;
@@ -55,13 +63,53 @@ export function shouldRecomputeSceneScale(
 export function positionMetersToScene(
   positionMeters: PositionMeters,
   metersToSceneUnit: number,
+  originMeters: PositionMeters = { x: 0, y: 0, z: 0 },
 ): ScenePosition {
   assertPositiveFiniteScale(metersToSceneUnit);
+  assertFinitePosition(originMeters, 'originMeters');
 
   return {
-    x: positionMeters.x * metersToSceneUnit,
-    y: positionMeters.y * metersToSceneUnit,
-    z: positionMeters.z * metersToSceneUnit,
+    x: (positionMeters.x - originMeters.x) * metersToSceneUnit,
+    y: (positionMeters.y - originMeters.y) * metersToSceneUnit,
+    z: (positionMeters.z - originMeters.z) * metersToSceneUnit,
+  };
+}
+
+export function reprojectScenePosition(
+  position: ScenePosition,
+  options: SceneReprojectionOptions,
+): ScenePosition {
+  assertFinitePosition(position, 'position');
+  assertPositiveFiniteScale(options.previousMetersToSceneUnit);
+  assertPositiveFiniteScale(options.nextMetersToSceneUnit);
+  assertFinitePosition(options.previousOriginMeters, 'previousOriginMeters');
+  assertFinitePosition(options.nextOriginMeters, 'nextOriginMeters');
+
+  const scaleRatio = options.nextMetersToSceneUnit / options.previousMetersToSceneUnit;
+  if (options.originTracksSameBody) {
+    return {
+      x: position.x * scaleRatio,
+      y: position.y * scaleRatio,
+      z: position.z * scaleRatio,
+    };
+  }
+
+  return {
+    x:
+      (position.x / options.previousMetersToSceneUnit +
+        options.previousOriginMeters.x -
+        options.nextOriginMeters.x) *
+      options.nextMetersToSceneUnit,
+    y:
+      (position.y / options.previousMetersToSceneUnit +
+        options.previousOriginMeters.y -
+        options.nextOriginMeters.y) *
+      options.nextMetersToSceneUnit,
+    z:
+      (position.z / options.previousMetersToSceneUnit +
+        options.previousOriginMeters.z -
+        options.nextOriginMeters.z) *
+      options.nextMetersToSceneUnit,
   };
 }
 
@@ -94,5 +142,11 @@ export function computePositionRingRadius(
 function assertPositiveFiniteScale(metersToSceneUnit: number): void {
   if (!Number.isFinite(metersToSceneUnit) || metersToSceneUnit <= 0) {
     throw new RangeError('metersToSceneUnit 必须是正有限数');
+  }
+}
+
+function assertFinitePosition(position: PositionMeters, name: string): void {
+  if (![position.x, position.y, position.z].every(Number.isFinite)) {
+    throw new RangeError(`${name} 必须包含有限坐标`);
   }
 }

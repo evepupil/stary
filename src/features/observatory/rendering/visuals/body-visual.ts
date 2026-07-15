@@ -21,12 +21,14 @@ import {
 
 import type { BodyAppearanceProfile, BodySurfaceKind } from '../appearance/body-appearance';
 import { resolveBodyEnvironmentProfile } from '../appearance/body-environment';
+import { resolveBlackHoleVisualProfile } from '../appearance/black-hole-appearance';
 import type { BodyAssetPlan } from '../assets/body-asset-plan';
 import type { TextureAssetCache } from '../assets/texture-cache';
 import type { RendererBackend } from '../create-renderer';
 import { STELLAR_LIGHT_DISTANCE_DECAY, computeScaledStellarLightIntensity } from '../light-scale';
 import { getSphereSegments, type BodyLod } from '../render-scale';
 import { BodyVisualAssetBinding } from './body-visual-assets';
+import { createBlackHoleVisual, disposeBlackHoleVisual, type BlackHoleVisual } from './black-hole';
 import {
   createBodyEnvironmentVisual,
   disposeBodyEnvironmentVisual,
@@ -44,6 +46,7 @@ export interface BodyVisual {
   appearance: BodyAppearanceProfile;
   appearanceSignature: string;
   readonly assetBinding: BodyVisualAssetBinding | null;
+  readonly blackHole: BlackHoleVisual | null;
   readonly bodyId: string;
   readonly environment: BodyEnvironmentVisual | null;
   readonly halo: Sprite | null;
@@ -57,6 +60,7 @@ export interface BodyVisual {
   readonly surfaceKind: BodySurfaceKind;
   isPrimary: boolean;
   lod: BodyLod;
+  observableProjectedRadiusPixels: number;
   physicalRadiusSceneUnits: number;
   projectedRadiusPixels: number;
   stellarVisibility: number;
@@ -98,6 +102,13 @@ export function createBodyVisual(
       : createBodyEnvironmentVisual(environmentProfile, backend, appearance.structureSeed);
   if (environment !== null) {
     root.add(environment.group);
+  }
+
+  const blackHoleProfile = resolveBlackHoleVisualProfile(appearance.surfaceKind);
+  const blackHole =
+    blackHoleProfile === null ? null : createBlackHoleVisual(blackHoleProfile, backend);
+  if (blackHole !== null) {
+    root.add(blackHole.group);
   }
 
   const planetaryRing =
@@ -145,6 +156,7 @@ export function createBodyVisual(
     appearance,
     appearanceSignature: getAppearanceSignature(appearance),
     assetBinding,
+    blackHole,
     bodyId: appearance.bodyId,
     environment,
     halo,
@@ -154,6 +166,7 @@ export function createBodyVisual(
     lod,
     markerRing,
     mesh,
+    observableProjectedRadiusPixels: 0,
     physicalRadiusSceneUnits: 0,
     planetaryRing,
     projectedRadiusPixels: 0,
@@ -239,6 +252,9 @@ export function disposeBodyVisual(scene: Scene, visual: BodyVisual): void {
   visual.halo?.material.dispose();
   if (visual.environment !== null) {
     disposeBodyEnvironmentVisual(visual.environment);
+  }
+  if (visual.blackHole !== null) {
+    disposeBlackHoleVisual(visual.blackHole);
   }
   if (visual.planetaryRing !== null) {
     disposePlanetaryRingVisual(visual.planetaryRing);

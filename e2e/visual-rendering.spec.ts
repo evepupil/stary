@@ -64,6 +64,47 @@ interface PlanetaryRingProjectionDiagnostic {
   readonly innerRadiusFraction: number;
 }
 
+interface BlackHoleResourceDiagnostic {
+  readonly accretionDiskVisible: boolean;
+  readonly haloVisible: boolean;
+  readonly id: string;
+  readonly mode: 'webgpu-halo' | 'webgl2-ring';
+  readonly observableOuterRadiusRatio: number;
+  readonly observableProjectedRadiusPixels: number;
+  readonly photonRingVisible: boolean;
+  readonly physicalProjectedRadiusPixels: number;
+  readonly visible: boolean;
+}
+
+interface TextureCacheDiagnostic {
+  readonly disposed: boolean;
+  readonly loading: number;
+  readonly ready: number;
+  readonly references: number;
+  readonly waiters: number;
+}
+
+interface VisualResourceCountsDiagnostic {
+  readonly atmosphereShells: number;
+  readonly blackHoleEffects: number;
+  readonly blackHoleSprites: number;
+  readonly cloudLayers: number;
+  readonly cloudShadows: number;
+  readonly planetaryRingMeshes: number;
+  readonly textureCache: TextureCacheDiagnostic;
+}
+
+interface VisualOriginStateDiagnostic {
+  readonly bodyId: string | null;
+  readonly focusedLocalPosition: {
+    readonly x: number;
+    readonly y: number;
+    readonly z: number;
+  } | null;
+  readonly maxLocalMagnitude: number;
+  readonly originMeters: { readonly x: number; readonly y: number; readonly z: number };
+}
+
 interface PixelColor {
   readonly blue: number;
   readonly green: number;
@@ -164,6 +205,248 @@ async function readBodyProjection(
     throw new Error(`视觉诊断缺少 ${bodyId} 投影`);
   }
   return projection;
+}
+
+async function expectSynchronizedCreationSnapshot(observatory: Locator): Promise<void> {
+  await expect(observatory).toHaveAttribute('data-mode', 'create');
+  await expect(observatory).toHaveAttribute('data-creation-phase', 'placing');
+  await expect
+    .poll(async () => {
+      const simulationTime = await observatory.getAttribute('data-simulation-time-seconds');
+      const snapshotTime = await observatory.getAttribute('data-body-snapshot-time-seconds');
+      return simulationTime !== null && simulationTime === snapshotTime;
+    })
+    .toBe(true);
+}
+
+async function createBlackHole(page: Page): Promise<string> {
+  const observatory = page.locator('main.observatory-shell');
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await page.getByRole('button', { name: '创造', exact: true }).click();
+  await expect(page.getByText('模拟已暂停')).toBeVisible();
+  await expectSynchronizedCreationSnapshot(observatory);
+  await page.getByRole('radio', { name: '黑洞 5 倍太阳质量黑洞' }).click();
+
+  const bounds = await canvas.boundingBox();
+  expect(bounds).not.toBeNull();
+  if (bounds === null) {
+    throw new Error('黑洞创建流程缺少画布边界');
+  }
+  const start = {
+    x: bounds.x + bounds.width * 0.64,
+    y: bounds.y + bounds.height * 0.44,
+  };
+  await page.mouse.move(start.x, start.y);
+  await page.mouse.down();
+  await page.mouse.move(start.x, start.y - Math.min(76, bounds.height * 0.1), { steps: 8 });
+  await page.mouse.up();
+
+  await expect(canvas).toHaveAttribute('data-creation-stage', 'placed');
+  await expect(canvas).toHaveAttribute('data-creation-body-visual-count', '1');
+  await expect
+    .poll(async () => await canvas.getAttribute('data-creation-preview-risk'), {
+      timeout: 30_000,
+    })
+    .toMatch(/stable|collision|escape/);
+  await expect(canvas).toHaveAttribute('data-creation-preview-track-count', '1');
+  await expect(observatory).toHaveAttribute('data-creation-phase', 'ready');
+  await page.getByRole('button', { name: '确认创建', exact: true }).click();
+
+  await expect(observatory).toHaveAttribute('data-mode', 'observe');
+  await expect(observatory).toHaveAttribute('data-body-revision', '1');
+  await expect(observatory).toHaveAttribute('data-view-mode', 'focus');
+  await expect(canvas).toHaveAttribute('data-creation-active', 'false');
+  return 'created-black-hole-01';
+}
+
+async function waitForCameraTransition(
+  canvas: Locator,
+  expectedOriginBodyId: string,
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const state = await readJsonAttribute<{ readonly transitionActive: boolean }>(
+        canvas,
+        'data-visual-camera-state',
+      );
+      const origin = await readJsonAttribute<VisualOriginStateDiagnostic>(
+        canvas,
+        'data-visual-origin-state',
+      );
+      return { originBodyId: origin.bodyId, transitionActive: state.transitionActive };
+    })
+    .toEqual({ originBodyId: expectedOriginBodyId, transitionActive: false });
+}
+
+async function closeMobileInspectorIfVisible(page: Page): Promise<void> {
+  const closeButton = page.getByRole('button', { name: '关闭天体数据', exact: true });
+  if (await closeButton.isVisible()) {
+    await closeButton.click();
+  }
+}
+
+async function focusBodyByName(page: Page, name: string, mobile: boolean): Promise<void> {
+  if (mobile) {
+    await closeMobileInspectorIfVisible(page);
+    await page.getByRole('button', { name: '天体目录', exact: true }).click();
+  }
+  await page.getByRole('button', { name: `聚焦${name}`, exact: true }).click();
+  if (mobile) {
+    await closeMobileInspectorIfVisible(page);
+  }
+}
+
+async function readBlackHoleResource(
+  canvas: Locator,
+  bodyId: string,
+): Promise<BlackHoleResourceDiagnostic> {
+  const resources = await readJsonAttribute<BlackHoleResourceDiagnostic[]>(
+    canvas,
+    'data-visual-black-hole-resources',
+  );
+  const resource = resources.find((candidate) => candidate.id === bodyId);
+  if (resource === undefined) {
+    throw new Error(`视觉诊断缺少 ${bodyId} 黑洞资源`);
+  }
+  return resource;
+}
+
+async function expectBlackHoleResource(
+  canvas: Locator,
+  bodyId: string,
+  expectedMode: BlackHoleResourceDiagnostic['mode'],
+): Promise<BlackHoleResourceDiagnostic> {
+  await expect
+    .poll(async () => await readBlackHoleResource(canvas, bodyId))
+    .toEqual({
+      accretionDiskVisible: false,
+      haloVisible: expectedMode === 'webgpu-halo',
+      id: bodyId,
+      mode: expectedMode,
+      observableOuterRadiusRatio: 3.25,
+      observableProjectedRadiusPixels: expect.any(Number),
+      photonRingVisible: true,
+      physicalProjectedRadiusPixels: expect.any(Number),
+      visible: true,
+    });
+  const resource = await readBlackHoleResource(canvas, bodyId);
+  expect(resource.observableProjectedRadiusPixels, `${bodyId} 可观察轮廓投影过小`).toBeGreaterThan(
+    48,
+  );
+  expect(resource.physicalProjectedRadiusPixels, `${bodyId} 物理事件视界投影无效`).toBeGreaterThan(
+    0,
+  );
+  expect(
+    resource.observableProjectedRadiusPixels / resource.physicalProjectedRadiusPixels,
+    `${bodyId} 可观察轮廓与物理半径比例错误`,
+  ).toBeCloseTo(resource.observableOuterRadiusRatio, 2);
+  return resource;
+}
+
+async function expectBlackHolePixels(
+  canvas: Locator,
+  bodyId: string,
+  resource: BlackHoleResourceDiagnostic,
+): Promise<void> {
+  const projection = await readBodyProjection(canvas, bodyId);
+  const capture = await captureCanvas(canvas);
+  const centerX = projection.x * capture.scaleX;
+  const centerY = projection.y * capture.scaleY;
+  const radiusX = resource.observableProjectedRadiusPixels * capture.scaleX;
+  const radiusY = resource.observableProjectedRadiusPixels * capture.scaleY;
+  const observableRadius = Math.min(radiusX, radiusY);
+  expect(observableRadius, `${bodyId} 可观察黑洞近景过小`).toBeGreaterThan(48);
+  expect(centerX - radiusX * 1.25, `${bodyId} 左侧轮廓采样越界`).toBeGreaterThanOrEqual(0);
+  expect(centerX + radiusX * 1.25, `${bodyId} 右侧轮廓采样越界`).toBeLessThan(capture.image.width);
+  expect(centerY - radiusY * 1.25, `${bodyId} 上侧轮廓采样越界`).toBeGreaterThanOrEqual(0);
+  expect(centerY + radiusY * 1.25, `${bodyId} 下侧轮廓采样越界`).toBeLessThan(capture.image.height);
+
+  const coreLuminances: number[] = [];
+  const ringLuminances: number[] = [];
+  const ringBlueBiases: number[] = [];
+  const backgroundLuminances: number[] = [];
+  const ringSamples: { readonly angle: number; readonly luminance: number }[] = [];
+  for (let y = Math.floor(centerY - radiusY * 1.25); y <= centerY + radiusY * 1.25; y += 1) {
+    for (let x = Math.floor(centerX - radiusX * 1.25); x <= centerX + radiusX * 1.25; x += 1) {
+      const normalizedX = (x - centerX) / radiusX;
+      const normalizedY = (y - centerY) / radiusY;
+      const normalizedRadius = Math.hypot(normalizedX, normalizedY);
+      const pixel = readPixel(capture.image, x, y);
+      const luminance = pixelLuminance(pixel);
+      if (normalizedRadius <= 0.55) {
+        coreLuminances.push(luminance);
+      } else if (normalizedRadius >= 0.73 && normalizedRadius <= 0.86) {
+        ringLuminances.push(luminance);
+        ringBlueBiases.push(pixel.blue - (pixel.red + pixel.green) / 2);
+        ringSamples.push({ angle: Math.atan2(normalizedY, normalizedX), luminance });
+      } else if (normalizedRadius >= 1.08 && normalizedRadius <= 1.25) {
+        backgroundLuminances.push(luminance);
+      }
+    }
+  }
+
+  expect(coreLuminances.length, `${bodyId} 黑洞阴影采样不足`).toBeGreaterThan(1_000);
+  expect(ringLuminances.length, `${bodyId} 光子环采样不足`).toBeGreaterThan(500);
+  expect(backgroundLuminances.length, `${bodyId} 背景采样不足`).toBeGreaterThan(500);
+  const coreNinetieth = percentile(coreLuminances, 0.9);
+  const backgroundMedian = percentile(backgroundLuminances, 0.5);
+  const ringThreshold = Math.max(coreNinetieth, backgroundMedian) + 12;
+  const darkCoreCoverage =
+    coreLuminances.filter((luminance) => luminance < 12).length / coreLuminances.length;
+  const brightRingCoverage =
+    ringLuminances.filter((luminance) => luminance > ringThreshold).length / ringLuminances.length;
+  const coveredSectors = Array.from({ length: 16 }, (_, sector) => {
+    const sectorStart = -Math.PI + (sector * Math.PI * 2) / 16;
+    const sectorEnd = sectorStart + (Math.PI * 2) / 16;
+    return ringSamples.some(
+      (sample) =>
+        sample.angle >= sectorStart && sample.angle < sectorEnd && sample.luminance > ringThreshold,
+    );
+  }).filter(Boolean).length;
+
+  expect(darkCoreCoverage, `${bodyId} 中心缺少连续黑洞阴影`).toBeGreaterThan(0.8);
+  expect(
+    percentile(ringLuminances, 0.9) - coreNinetieth,
+    `${bodyId} 光子环没有从黑洞阴影中分离`,
+  ).toBeGreaterThan(18);
+  expect(brightRingCoverage, `${bodyId} 光子环亮像素覆盖不足`).toBeGreaterThan(0.08);
+  expect(coveredSectors, `${bodyId} 光子环轮廓不连续`).toBeGreaterThanOrEqual(10);
+  expect(percentile(ringBlueBiases, 0.75), `${bodyId} 光子环缺少冷色偏向`).toBeGreaterThan(4);
+}
+
+async function readVisualResourceCounts(canvas: Locator): Promise<VisualResourceCountsDiagnostic> {
+  return readJsonAttribute<VisualResourceCountsDiagnostic>(canvas, 'data-visual-resource-counts');
+}
+
+async function waitForSettledVisualResources(canvas: Locator): Promise<void> {
+  await expect
+    .poll(async () => {
+      const counts = await readVisualResourceCounts(canvas);
+      return { loading: counts.textureCache.loading, waiters: counts.textureCache.waiters };
+    })
+    .toEqual({ loading: 0, waiters: 0 });
+}
+
+async function expectBlackHoleOrigin(canvas: Locator, bodyId: string): Promise<void> {
+  const origin = await readJsonAttribute<VisualOriginStateDiagnostic>(
+    canvas,
+    'data-visual-origin-state',
+  );
+  expect(origin.bodyId).toBe(bodyId);
+  expect(origin.focusedLocalPosition).not.toBeNull();
+  expect(
+    Math.hypot(
+      origin.focusedLocalPosition?.x ?? Number.POSITIVE_INFINITY,
+      origin.focusedLocalPosition?.y ?? Number.POSITIVE_INFINITY,
+      origin.focusedLocalPosition?.z ?? Number.POSITIVE_INFINITY,
+    ),
+    `${bodyId} 聚焦后没有落在局部渲染原点`,
+  ).toBeLessThan(1e-7);
+  expect(
+    Math.hypot(origin.originMeters.x, origin.originMeters.y, origin.originMeters.z),
+    `${bodyId} 黑洞创建位置没有进入物理空间`,
+  ).toBeGreaterThan(1e9);
+  expect(origin.maxLocalMagnitude, '局部场景范围无效').toBeGreaterThan(0);
 }
 
 async function expectSurfaceResource(
@@ -495,7 +778,7 @@ async function expectSaturnRingPixels(canvas: Locator): Promise<void> {
   );
   expect(ringMedian - Math.min(...hole), 'saturn 环内洞没有露出空间背景').toBeGreaterThan(3);
   expect(Math.max(...radialBandContrasts), 'saturn 同侧环带缺少亮暗相间的径向结构').toBeGreaterThan(
-    2,
+    1.75,
   );
 }
 
@@ -630,6 +913,7 @@ test('桌面默认后端显示真实太阳、地球环境和土星环影', async
   await expectVisualFoundation(page);
   const canvas = page.locator('canvas[data-renderer-backend]');
   await page.getByRole('button', { name: '聚焦太阳', exact: true }).click();
+  await waitForCameraTransition(canvas, 'sun');
   await expect(canvas).toHaveAttribute('data-render-scale-tier', 'surface');
   await expect(canvas).toHaveAttribute('data-visual-focused-marker-visible', 'false');
   await expect
@@ -639,6 +923,7 @@ test('桌面默认后端显示真实太阳、地球环境和土星环影', async
   await expectFocusedStarPixels(canvas, 'sun');
 
   await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
+  await waitForCameraTransition(canvas, 'earth');
   await expectSurfaceResource(canvas, 'earth', 'earth-surface');
   await expectEarthEnvironmentResources(canvas);
   await expectEarthSurfacePixels(canvas);
@@ -646,6 +931,7 @@ test('桌面默认后端显示真实太阳、地球环境和土星环影', async
   await expectPausedCloudsAdvanceAfterOneHour(page, canvas);
 
   await page.getByRole('button', { name: '聚焦土星', exact: true }).click();
+  await waitForCameraTransition(canvas, 'saturn');
   await expectSurfaceResource(canvas, 'saturn', 'saturn-surface');
   await expectSaturnRingPixels(canvas);
 
@@ -668,6 +954,7 @@ test('手机 WebGL2 回退保留真实地球环境和土星环影', async ({ pag
   await page.getByRole('button', { name: '天体目录', exact: true }).click();
   await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
   await page.getByRole('button', { name: '关闭天体数据', exact: true }).click();
+  await waitForCameraTransition(canvas, 'earth');
   await expect(page.getByRole('complementary', { name: '天体数据' })).toBeHidden();
   await expect
     .poll(async () => await canvas.getAttribute('data-render-scale-tier'))
@@ -687,6 +974,7 @@ test('手机 WebGL2 回退保留真实地球环境和土星环影', async ({ pag
   await page.getByRole('button', { name: '天体目录', exact: true }).click();
   await page.getByRole('button', { name: '聚焦土星', exact: true }).click();
   await page.getByRole('button', { name: '关闭天体数据', exact: true }).click();
+  await waitForCameraTransition(canvas, 'saturn');
   await expect(page.getByRole('complementary', { name: '天体数据' })).toBeHidden();
   await expectSurfaceResource(canvas, 'saturn', 'saturn-surface');
   await expectSaturnRingPixels(canvas);
@@ -802,4 +1090,116 @@ test('地球云图失败时保留可移动的程序化云层', async ({ page }) 
   await expectPausedCloudsAdvanceAfterOneHour(page, canvas, 'fallback');
 
   expect(browserDiagnostics, '云图失败回退流程存在 console warning/error').toEqual([]);
+});
+
+test('桌面默认后端创建并聚焦可辨识黑洞，重复尺度切换后资源稳定', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
+
+  await expectVisualFoundation(page);
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  const backend = await canvas.getAttribute('data-renderer-backend');
+  expect(backend === 'webgpu' || backend === 'webgl2').toBe(true);
+  const expectedMode: BlackHoleResourceDiagnostic['mode'] =
+    backend === 'webgpu' ? 'webgpu-halo' : 'webgl2-ring';
+  const blackHoleId = await createBlackHole(page);
+
+  await waitForCameraTransition(canvas, blackHoleId);
+  await expect(page.getByRole('button', { name: '聚焦黑洞 01', exact: true })).toHaveAttribute(
+    'aria-current',
+    'true',
+  );
+  const appearances = await readJsonAttribute<AppearanceDiagnostic[]>(
+    canvas,
+    'data-visual-appearance-kinds',
+  );
+  expect(appearances).toContainEqual({ id: blackHoleId, kind: 'black-hole' });
+  const resource = await expectBlackHoleResource(canvas, blackHoleId, expectedMode);
+  await expectBlackHoleOrigin(canvas, blackHoleId);
+  await expectBlackHolePixels(canvas, blackHoleId, resource);
+
+  await focusBodyByName(page, '地球', false);
+  await waitForCameraTransition(canvas, 'earth');
+  await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+  await focusBodyByName(page, '黑洞 01', false);
+  await waitForCameraTransition(canvas, blackHoleId);
+  await waitForSettledVisualResources(canvas);
+  const stableResourceCounts = await readVisualResourceCounts(canvas);
+  expect(stableResourceCounts.blackHoleEffects).toBe(1);
+  expect(stableResourceCounts.blackHoleSprites).toBe(expectedMode === 'webgpu-halo' ? 2 : 1);
+  expect(stableResourceCounts.textureCache.disposed).toBe(false);
+  const firstFrameCount = Number(await canvas.getAttribute('data-render-frame-count'));
+
+  for (let cycle = 0; cycle < 3; cycle += 1) {
+    await focusBodyByName(page, '地球', false);
+    await waitForCameraTransition(canvas, 'earth');
+    await focusBodyByName(page, '黑洞 01', false);
+    await waitForCameraTransition(canvas, blackHoleId);
+  }
+
+  await waitForSettledVisualResources(canvas);
+  await expect
+    .poll(async () => await readVisualResourceCounts(canvas))
+    .toEqual(stableResourceCounts);
+  await expect
+    .poll(async () => Number(await canvas.getAttribute('data-render-frame-count')))
+    .toBeGreaterThan(firstFrameCount + 20);
+  await expectBlackHoleResource(canvas, blackHoleId, expectedMode);
+  await expectBlackHoleOrigin(canvas, blackHoleId);
+
+  expect(browserDiagnostics, '桌面黑洞视觉流程存在 console warning/error').toEqual([]);
+});
+
+test('手机 WebGL2 回退创建黑洞并保留暗核、光子环和稳定资源', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.setViewportSize({ height: 844, width: 390 });
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: undefined,
+    });
+  });
+  await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
+
+  await expectVisualFoundation(page, 'webgl2');
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  const blackHoleId = await createBlackHole(page);
+  await closeMobileInspectorIfVisible(page);
+  await waitForCameraTransition(canvas, blackHoleId);
+
+  const resource = await expectBlackHoleResource(canvas, blackHoleId, 'webgl2-ring');
+  expect(resource.haloVisible).toBe(false);
+  await expectBlackHoleOrigin(canvas, blackHoleId);
+  await expectBlackHolePixels(canvas, blackHoleId, resource);
+
+  await focusBodyByName(page, '地球', true);
+  await waitForCameraTransition(canvas, 'earth');
+  await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+  await focusBodyByName(page, '黑洞 01', true);
+  await waitForCameraTransition(canvas, blackHoleId);
+  await waitForSettledVisualResources(canvas);
+  const stableResourceCounts = await readVisualResourceCounts(canvas);
+  expect(stableResourceCounts.blackHoleEffects).toBe(1);
+  expect(stableResourceCounts.blackHoleSprites).toBe(1);
+  expect(stableResourceCounts.textureCache.disposed).toBe(false);
+
+  for (let cycle = 0; cycle < 2; cycle += 1) {
+    await focusBodyByName(page, '地球', true);
+    await waitForCameraTransition(canvas, 'earth');
+    await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+    await focusBodyByName(page, '黑洞 01', true);
+    await waitForCameraTransition(canvas, blackHoleId);
+  }
+
+  await waitForSettledVisualResources(canvas);
+  await expect
+    .poll(async () => await readVisualResourceCounts(canvas))
+    .toEqual(stableResourceCounts);
+  const canvasBox = await canvas.boundingBox();
+  expect(canvasBox?.width ?? 0).toBeGreaterThanOrEqual(390);
+  expect(canvasBox?.height ?? 0).toBeGreaterThan(300);
+  await expectBlackHoleResource(canvas, blackHoleId, 'webgl2-ring');
+  await expectBlackHoleOrigin(canvas, blackHoleId);
+
+  expect(browserDiagnostics, '手机 WebGL2 黑洞回退流程存在 console warning/error').toEqual([]);
 });

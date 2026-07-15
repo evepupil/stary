@@ -1,4 +1,4 @@
-import type { BodyState } from '../../../physics/protocol/schemas';
+import type { BodyState, PositionMeters } from '../../../physics/protocol/schemas';
 import type { ScenePosition } from './coordinates';
 
 const GRAVITATIONAL_CONSTANT_SI = 6.6743e-11;
@@ -16,6 +16,7 @@ export function sampleOsculatingOrbit(
   body: BodyState,
   metersToSceneUnit: number,
   segments = 256,
+  originMeters: PositionMeters = { x: 0, y: 0, z: 0 },
 ): readonly ScenePosition[] | null {
   if (!Number.isInteger(segments) || segments < 16) {
     throw new RangeError('segments 必须是至少 16 的整数');
@@ -75,7 +76,7 @@ export function sampleOsculatingOrbit(
       scale(transverseDirection, radiusMeters * Math.sin(trueAnomaly)),
     );
     const absolutePoint = add(primary.positionMeters, relativePoint);
-    points.push(scale(absolutePoint, metersToSceneUnit));
+    points.push(scale(subtract(absolutePoint, originMeters), metersToSceneUnit));
   }
 
   return points;

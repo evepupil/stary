@@ -63,6 +63,25 @@ export function captureCreationCameraState(
   };
 }
 
+export function rescaleStoredCreationCameraState(
+  state: StoredCreationCameraState,
+  scaleRatio: number,
+): StoredCreationCameraState {
+  if (!Number.isFinite(scaleRatio) || scaleRatio <= 0) {
+    throw new RangeError('scaleRatio 必须是正有限数');
+  }
+  return {
+    far: state.far * scaleRatio,
+    maxDistance: state.maxDistance * scaleRatio,
+    minDistance: state.minDistance * scaleRatio,
+    near: state.near * scaleRatio,
+    position: state.position.clone().multiplyScalar(scaleRatio),
+    quaternion: state.quaternion.clone(),
+    target: state.target.clone().multiplyScalar(scaleRatio),
+    up: state.up.clone(),
+  };
+}
+
 export function applyCreationCameraView(
   camera: PerspectiveCamera,
   controls: CreationCameraControls,

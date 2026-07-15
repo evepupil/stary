@@ -24,7 +24,7 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import type { BodyState } from '../../../physics/protocol/schemas';
+import type { BodyState, PositionMeters } from '../../../physics/protocol/schemas';
 import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import { getCelestialCatalogEntry } from '../catalog';
 import { advanceAdaptiveExposure, computeTargetExposure } from './adaptive-exposure';
@@ -38,8 +38,15 @@ import {
   type ObservatoryViewMode,
 } from './camera-focus';
 import {
+  computeCameraNavigationSettings,
+  computeCameraTransitionDurationMilliseconds,
+  easeCameraTransitionProgress,
+  interpolateCameraDistance,
+} from './camera-navigation';
+import {
   applyCreationCameraView,
   captureCreationCameraState,
+  rescaleStoredCreationCameraState,
   restoreCreationCameraState,
   type StoredCreationCameraState,
 } from './creation-camera';
@@ -49,6 +56,7 @@ import {
   computeScenePhysicalExtentMeters,
   physicalRadiusToSceneUnits,
   positionMetersToScene,
+  reprojectScenePosition,
   shouldRecomputeSceneScale,
 } from './coordinates';
 import { computeMinimumBillboardWorldRadius, OBSERVATORY_VERTICAL_FOV_DEGREES } from './camera-fit';
@@ -86,6 +94,7 @@ import {
   updateBodyEnvironmentTime,
   updateBodyEnvironmentVisibility,
 } from './visuals/body-environment';
+import { updateBlackHoleScale, updateBlackHoleVisibility } from './visuals/black-hole';
 import {
   createBodyVisual,
   disposeBodyVisual,
@@ -144,6 +153,24 @@ interface BodyLightingObservation {
   readonly stellarVisibility: number;
 }
 
+interface CameraTransitionState {
+  readonly direction: Vector3;
+  readonly durationMilliseconds: number;
+  readonly endDistance: number;
+  readonly endTarget: Vector3;
+  startTimeMilliseconds: number | null;
+  readonly startDistance: number;
+  readonly startTarget: Vector3;
+}
+
+interface RenderScaleHistoryEntry {
+  readonly distance: number;
+  readonly frame: number;
+  readonly from: RenderScaleTier;
+  readonly projectedRadiusPixels: number;
+  readonly to: RenderScaleTier;
+}
+
 export interface ObservatorySceneOptions {
   readonly backend: RendererBackend;
   readonly mount: HTMLDivElement;
@@ -183,6 +210,7 @@ export class ObservatoryScene {
   private readonly renderer: ObservatoryRenderer;
   private readonly resizeObserver: ResizeObserver | null = null;
   private readonly scene = new Scene();
+  private readonly starField = createStarField();
   private readonly textureCache = new TextureAssetCache();
   private readonly exposeMarkerDiagnostics =
     new URLSearchParams(window.location.search).get(MARKER_DIAGNOSTICS_QUERY_PARAMETER) === '1';
@@ -190,8 +218,11 @@ export class ObservatoryScene {
     new URLSearchParams(window.location.search).get(VISUAL_DIAGNOSTICS_QUERY_PARAMETER) === '1';
   private animationFrame: number | null = null;
   private bodySetKey = '';
+  private cameraTransition: CameraTransitionState | null = null;
+  private cameraTransitionProgress = 1;
   private cameraWasInteracted = false;
   private creationCameraSnapshot: StoredCreationCameraState | null = null;
+  private creationCameraSnapshotMetersToSceneUnit: number | null = null;
   private creationCameraWasInteracted = false;
   private creationDragStartScene: Vector3 | null = null;
   private creationPointerId: number | null = null;
@@ -210,6 +241,9 @@ export class ObservatoryScene {
   private selectedBodyId: string | null = null;
   private renderFrameCount = 0;
   private renderScaleTier: RenderScaleTier = 'system';
+  private renderScaleHistory: readonly RenderScaleHistoryEntry[] = [];
+  private sceneOriginBodyId: string | null = null;
+  private sceneOriginMeters: PositionMeters = { x: 0, y: 0, z: 0 };
   private scenePhysicalExtentMeters = 0;
   private updatingControlsProgrammatically = false;
   private viewMode: ObservatoryViewMode = 'overview';
@@ -247,7 +281,7 @@ export class ObservatoryScene {
 
       this.scene.background = new Color(0x030506);
       this.scene.add(new AmbientLight(0x7f96a3, 0.18));
-      this.scene.add(createStarField());
+      this.scene.add(this.starField);
       this.creationVelocityArrow.visible = false;
       this.creationVelocityArrow.renderOrder = 6;
       this.scene.add(this.creationVelocityArrow);
@@ -282,6 +316,7 @@ export class ObservatoryScene {
     this.selectedBodyId = selectedBodyId;
     this.latestBodies = bodies;
     this.latestSimulationTimeSeconds = simulationTimeSeconds;
+    const previousMetersToSceneUnit = this.metersToSceneUnit;
     const primary = findMostMassiveBody(bodies);
     const nextBodySetKey = bodies
       .map((body) => body.id)
@@ -297,6 +332,15 @@ export class ObservatoryScene {
       this.scenePhysicalExtentMeters = nextPhysicalExtentMeters;
       this.metersToSceneUnit = computeMetersToSceneUnit(bodies);
     }
+    const focusedOriginBody =
+      this.viewMode === 'focus' && !usesCreationCamera(this.creationState)
+        ? (bodies.find((body) => body.id === this.focusBodyId) ?? null)
+        : null;
+    this.rebaseSceneOrigin(
+      focusedOriginBody?.positionMeters ?? { x: 0, y: 0, z: 0 },
+      focusedOriginBody?.id ?? null,
+      previousMetersToSceneUnit,
+    );
 
     const activeBodyIds = new Set(bodies.map((body) => body.id));
     const activeStellarLightIds = new Set(selectActiveStellarLightIds(bodies));
@@ -353,14 +397,16 @@ export class ObservatoryScene {
       return false;
     }
 
-    const frame = this.computeCameraFrameForBody(body);
     this.focusBodyId = bodyId;
     this.viewMode = 'focus';
     if (usesCreationCamera(this.creationState)) {
       return true;
     }
+    this.rebaseSceneOrigin(body.positionMeters, body.id, this.metersToSceneUnit);
+    this.refreshWorldTransforms();
+    const frame = this.computeCameraFrameForBody(body);
     this.cameraWasInteracted = false;
-    this.applyCameraFrame(frame);
+    this.beginCameraTransition(frame);
     return true;
   }
 
@@ -370,8 +416,10 @@ export class ObservatoryScene {
     if (usesCreationCamera(this.creationState)) {
       return;
     }
+    this.rebaseSceneOrigin({ x: 0, y: 0, z: 0 }, null, this.metersToSceneUnit);
+    this.refreshWorldTransforms();
     this.cameraWasInteracted = false;
-    this.applyCameraFrame(computeOverviewCameraFrame(this.camera.aspect));
+    this.beginCameraTransition(computeOverviewCameraFrame(this.camera.aspect));
   }
 
   setCreationState(state: CreationOverlayState | null): void {
@@ -445,7 +493,11 @@ export class ObservatoryScene {
   }
 
   private readonly updateBodyVisualTransform = (visual: BodyVisual, body: BodyState): void => {
-    const scenePosition = positionMetersToScene(body.positionMeters, this.metersToSceneUnit);
+    const scenePosition = positionMetersToScene(
+      body.positionMeters,
+      this.metersToSceneUnit,
+      this.sceneOriginMeters,
+    );
     const physicalRadiusSceneUnits = physicalRadiusToSceneUnits(
       body.radiusMeters,
       this.metersToSceneUnit,
@@ -456,6 +508,9 @@ export class ObservatoryScene {
     visual.halo?.scale.set(physicalRadiusSceneUnits * 3.2, physicalRadiusSceneUnits * 3.2, 1);
     visual.planetaryRing?.mesh.scale.setScalar(physicalRadiusSceneUnits);
     visual.planetaryRing?.shadowMesh.scale.setScalar(physicalRadiusSceneUnits * 1.0015);
+    if (visual.blackHole !== null) {
+      updateBlackHoleScale(visual.blackHole, physicalRadiusSceneUnits);
+    }
     if (visual.environment !== null) {
       updateBodyEnvironmentScale(visual.environment, physicalRadiusSceneUnits);
     }
@@ -468,6 +523,63 @@ export class ObservatoryScene {
     visual.markerRing.material.color.setHex(selected ? 0x72f1d5 : 0x4cc9b0);
   };
 
+  private rebaseSceneOrigin(
+    nextOriginMeters: PositionMeters,
+    nextOriginBodyId: string | null,
+    previousMetersToSceneUnit: number,
+  ): void {
+    const originChanged =
+      nextOriginMeters.x !== this.sceneOriginMeters.x ||
+      nextOriginMeters.y !== this.sceneOriginMeters.y ||
+      nextOriginMeters.z !== this.sceneOriginMeters.z;
+    const scaleChanged = previousMetersToSceneUnit !== this.metersToSceneUnit;
+    const originTracksSameBody =
+      nextOriginBodyId !== null && nextOriginBodyId === this.sceneOriginBodyId;
+    const coordinateFrameChanged = originChanged && !originTracksSameBody;
+    const shouldReprojectCamera =
+      coordinateFrameChanged ||
+      (scaleChanged && this.viewMode === 'focus' && !usesCreationCamera(this.creationState));
+    if (shouldReprojectCamera && this.controls !== null && previousMetersToSceneUnit > 0) {
+      const previousOrigin = this.sceneOriginMeters;
+      const reproject = (point: Vector3): Vector3 => {
+        const projected = reprojectScenePosition(point, {
+          nextMetersToSceneUnit: this.metersToSceneUnit,
+          nextOriginMeters,
+          originTracksSameBody,
+          previousMetersToSceneUnit,
+          previousOriginMeters: previousOrigin,
+        });
+        return new Vector3(projected.x, projected.y, projected.z);
+      };
+      this.camera.position.copy(reproject(this.camera.position));
+      this.controls.target.copy(reproject(this.controls.target));
+      if (this.cameraTransition !== null) {
+        const scaleRatio = this.metersToSceneUnit / previousMetersToSceneUnit;
+        this.cameraTransition = {
+          ...this.cameraTransition,
+          endDistance: this.cameraTransition.endDistance * scaleRatio,
+          endTarget: reproject(this.cameraTransition.endTarget),
+          startDistance: this.cameraTransition.startDistance * scaleRatio,
+          startTarget: reproject(this.cameraTransition.startTarget),
+        };
+      }
+      this.camera.updateMatrixWorld();
+    }
+    this.sceneOriginMeters = { ...nextOriginMeters };
+    this.sceneOriginBodyId = nextOriginBodyId;
+  }
+
+  private refreshWorldTransforms(): void {
+    for (const body of this.latestBodies) {
+      const visual = this.bodyVisuals.get(body.id);
+      if (visual !== undefined) {
+        this.updateBodyVisualTransform(visual, body);
+      }
+    }
+    this.updateOrbits(this.latestBodies);
+    this.updateCreationOverlay();
+  }
+
   private readonly updateOrbits = (bodies: readonly BodyState[]): void => {
     const activeOrbitIds = new Set<string>();
 
@@ -476,7 +588,13 @@ export class ObservatoryScene {
       if (parent === null) {
         continue;
       }
-      const points = sampleOsculatingOrbit(parent, body, this.metersToSceneUnit, ORBIT_SEGMENTS);
+      const points = sampleOsculatingOrbit(
+        parent,
+        body,
+        this.metersToSceneUnit,
+        ORBIT_SEGMENTS,
+        this.sceneOriginMeters,
+      );
       if (points === null) {
         continue;
       }
@@ -550,7 +668,11 @@ export class ObservatoryScene {
 
     try {
       if (!usesCreationCamera(this.creationState)) {
-        this.controls?.update();
+        if (this.cameraTransition === null) {
+          this.controls?.update();
+        } else {
+          this.updateCameraTransition(timestampMilliseconds);
+        }
       }
       let focusedProjectedRadiusPixels = 0;
       let focusedLightingObservation: BodyLightingObservation | null = null;
@@ -568,9 +690,17 @@ export class ObservatoryScene {
                 Math.max(1, this.mount.clientHeight),
               )
             : 0;
+        const observableProjectedRadiusPixels =
+          projectedRadiusPixels * (visual.blackHole?.profile.observableOuterRadiusRatio ?? 1);
         const nextLod =
-          projectedRadiusPixels > 0 ? selectBodyLod(projectedRadiusPixels, visual.lod) : 'low';
+          observableProjectedRadiusPixels > 0
+            ? selectBodyLod(observableProjectedRadiusPixels, visual.lod)
+            : 'low';
         visual.projectedRadiusPixels = projectedRadiusPixels;
+        visual.observableProjectedRadiusPixels = observableProjectedRadiusPixels;
+        if (visual.blackHole !== null) {
+          updateBlackHoleVisibility(visual.blackHole, observableProjectedRadiusPixels);
+        }
         const requiresLightingObservation =
           visual.environment !== null ||
           visual.planetaryRing !== null ||
@@ -604,13 +734,13 @@ export class ObservatoryScene {
         }
         if (
           visual.bodyId === this.focusBodyId ||
-          projectedRadiusPixels >= BODY_LOD_THRESHOLDS.medium.defaultPixels
+          observableProjectedRadiusPixels >= BODY_LOD_THRESHOLDS.medium.defaultPixels
         ) {
           visual.assetBinding?.start();
         }
         updateBodyVisualLod(visual, nextLod, this.backend);
         if (visual.bodyId === this.focusBodyId) {
-          focusedProjectedRadiusPixels = projectedRadiusPixels;
+          focusedProjectedRadiusPixels = observableProjectedRadiusPixels;
           focusedLightingObservation = lightingObservation;
         }
         visual.markerRing.quaternion.copy(this.camera.quaternion);
@@ -623,10 +753,27 @@ export class ObservatoryScene {
           computePositionRingRadius(visual.physicalRadiusSceneUnits, minimumWorldRadius),
         );
       }
-      this.renderScaleTier =
+      const nextRenderScaleTier =
         focusedProjectedRadiusPixels > 0
           ? selectRenderScaleTier(focusedProjectedRadiusPixels, this.renderScaleTier)
           : 'system';
+      if (nextRenderScaleTier !== this.renderScaleTier) {
+        this.renderScaleHistory = [
+          ...this.renderScaleHistory,
+          {
+            distance: this.camera.position.distanceTo(this.controls?.target ?? new Vector3()),
+            frame: this.renderFrameCount,
+            from: this.renderScaleTier,
+            projectedRadiusPixels: Number(focusedProjectedRadiusPixels.toFixed(3)),
+            to: nextRenderScaleTier,
+          },
+        ].slice(-8);
+        this.renderScaleTier = nextRenderScaleTier;
+      }
+      if (!usesCreationCamera(this.creationState)) {
+        this.applyCameraNavigation(this.renderScaleTier);
+      }
+      this.updateStarFieldForCamera();
       this.focusedLightingObservation = focusedLightingObservation;
       this.updateAdaptiveExposure(timestampMilliseconds, focusedLightingObservation);
       for (const visual of this.creationBodyVisuals.values()) {
@@ -726,6 +873,8 @@ export class ObservatoryScene {
 
   private readonly handleControlsChange = (): void => {
     if (!this.updatingControlsProgrammatically) {
+      this.cameraTransition = null;
+      this.cameraTransitionProgress = 1;
       this.cameraWasInteracted = true;
     }
   };
@@ -743,8 +892,14 @@ export class ObservatoryScene {
       controls.enableDamping = false;
       controls.update();
       this.creationCameraSnapshot = captureCreationCameraState(this.camera, controls);
+      this.creationCameraSnapshotMetersToSceneUnit = this.metersToSceneUnit;
       this.creationCameraWasInteracted = this.cameraWasInteracted;
+      this.cameraTransition = null;
+      this.cameraTransitionProgress = 1;
+      this.rebaseSceneOrigin({ x: 0, y: 0, z: 0 }, null, this.metersToSceneUnit);
+      this.refreshWorldTransforms();
       applyCreationCameraView(this.camera, controls);
+      this.updateStarFieldForCamera();
     } finally {
       controls.enableDamping = dampingEnabled;
       this.updatingControlsProgrammatically = false;
@@ -754,15 +909,38 @@ export class ObservatoryScene {
   private leaveCreationCameraView(): void {
     const controls = this.controls;
     const snapshot = this.creationCameraSnapshot;
-    if (controls === null || snapshot === null) {
+    const snapshotMetersToSceneUnit = this.creationCameraSnapshotMetersToSceneUnit;
+    if (controls === null || snapshot === null || snapshotMetersToSceneUnit === null) {
       return;
     }
 
     this.updatingControlsProgrammatically = true;
     try {
-      restoreCreationCameraState(this.camera, controls, snapshot);
+      const focusedBody = this.latestBodies.find((body) => body.id === this.focusBodyId) ?? null;
+      this.rebaseSceneOrigin(
+        this.viewMode === 'focus' && focusedBody !== null
+          ? focusedBody.positionMeters
+          : { x: 0, y: 0, z: 0 },
+        this.viewMode === 'focus' ? (focusedBody?.id ?? null) : null,
+        this.metersToSceneUnit,
+      );
+      this.refreshWorldTransforms();
+      const scaleChanged = snapshotMetersToSceneUnit !== this.metersToSceneUnit;
+      const snapshotToRestore =
+        scaleChanged && this.viewMode === 'focus'
+          ? rescaleStoredCreationCameraState(
+              snapshot,
+              this.metersToSceneUnit / snapshotMetersToSceneUnit,
+            )
+          : snapshot;
+      restoreCreationCameraState(this.camera, controls, snapshotToRestore);
+      if (scaleChanged && this.viewMode === 'focus') {
+        this.applyCameraNavigation(this.renderScaleTier);
+      }
+      this.updateStarFieldForCamera();
       this.cameraWasInteracted = this.creationCameraWasInteracted;
       this.creationCameraSnapshot = null;
+      this.creationCameraSnapshotMetersToSceneUnit = null;
     } finally {
       this.updatingControlsProgrammatically = false;
     }
@@ -790,9 +968,9 @@ export class ObservatoryScene {
     this.onCreationPlacementChange({
       phase,
       positionMeters: {
-        x: startScenePosition.x * inverseScale,
-        y: startScenePosition.y * inverseScale,
-        z: startScenePosition.z * inverseScale,
+        x: startScenePosition.x * inverseScale + this.sceneOriginMeters.x,
+        y: startScenePosition.y * inverseScale + this.sceneOriginMeters.y,
+        z: startScenePosition.z * inverseScale + this.sceneOriginMeters.z,
       },
       velocityMetersPerSecond: {
         x:
@@ -859,7 +1037,11 @@ export class ObservatoryScene {
         this.creationBodyVisuals.set(body.id, visual);
         this.scene.add(mesh);
       }
-      const position = positionMetersToScene(body.positionMeters, this.metersToSceneUnit);
+      const position = positionMetersToScene(
+        body.positionMeters,
+        this.metersToSceneUnit,
+        this.sceneOriginMeters,
+      );
       visual.mesh.position.set(position.x, position.y, position.z);
       visual.mesh.material.color.setHex(state.color);
       visual.mesh.material.opacity = state.previewPending ? 0.56 : 0.8;
@@ -880,7 +1062,11 @@ export class ObservatoryScene {
       this.creationVelocityArrow.visible = false;
       return;
     }
-    const origin = positionMetersToScene(placement.positionMeters, this.metersToSceneUnit);
+    const origin = positionMetersToScene(
+      placement.positionMeters,
+      this.metersToSceneUnit,
+      this.sceneOriginMeters,
+    );
     const velocityScene = new Vector3(
       placement.velocityMetersPerSecond.x,
       placement.velocityMetersPerSecond.y,
@@ -926,7 +1112,11 @@ export class ObservatoryScene {
       }
       const positions = new Float32Array(track.points.length * 3);
       for (const [index, point] of track.points.entries()) {
-        const position = positionMetersToScene(point.positionMeters, this.metersToSceneUnit);
+        const position = positionMetersToScene(
+          point.positionMeters,
+          this.metersToSceneUnit,
+          this.sceneOriginMeters,
+        );
         positions[index * 3] = position.x;
         positions[index * 3 + 1] = position.y;
         positions[index * 3 + 2] = position.z;
@@ -1108,12 +1298,14 @@ export class ObservatoryScene {
 
   private computeCameraFrameForBody(body: BodyState): ObservatoryCameraFrame {
     const assetPlan = resolveBodyAssetPlan(body.id);
-    if (assetPlan.surface !== null) {
+    const blackHole = this.bodyVisuals.get(body.id)?.blackHole ?? null;
+    if (assetPlan.surface !== null || blackHole !== null) {
       return computeBodyInspectionCameraFrame(
         body,
         this.metersToSceneUnit,
         this.camera.aspect,
-        assetPlan.ring?.outerRadiusRatio ?? 1,
+        blackHole?.profile.observableOuterRadiusRatio ?? assetPlan.ring?.outerRadiusRatio ?? 1,
+        this.sceneOriginMeters,
       );
     }
     return computeFocusCameraFrame(
@@ -1121,10 +1313,14 @@ export class ObservatoryScene {
       findOrbitParent(body, this.latestBodies),
       this.metersToSceneUnit,
       this.camera.aspect,
+      this.sceneOriginMeters,
     );
   }
 
   private followFocusedBody(): void {
+    if (this.cameraTransition !== null) {
+      return;
+    }
     const frame = this.computeCurrentFocusFrame();
     if (frame === null || this.controls === null) {
       return;
@@ -1146,6 +1342,8 @@ export class ObservatoryScene {
     if (this.controls === null) {
       return;
     }
+    this.cameraTransition = null;
+    this.cameraTransitionProgress = 1;
 
     this.updatingControlsProgrammatically = true;
     try {
@@ -1156,19 +1354,133 @@ export class ObservatoryScene {
       direction.normalize();
       this.controls.target.set(frame.target.x, frame.target.y, frame.target.z);
       this.camera.position.copy(this.controls.target).addScaledVector(direction, frame.distance);
-      this.controls.minDistance = Math.max(1e-6, frame.halfExtent * 0.05);
-      this.controls.maxDistance = Math.max(frame.distance * 4, frame.halfExtent * 12);
-      this.camera.near = Math.max(1e-7, frame.distance * 1e-5);
-      this.camera.far = Math.max(
-        frame.distance * 12,
-        frame.halfExtent * 64,
-        this.viewMode === 'overview' ? 320 : 1,
-      );
-      this.camera.updateProjectionMatrix();
+      this.renderScaleTier = frame.tier;
+      this.applyCameraNavigation(frame.tier, frame);
       this.controls.update();
+      this.updateStarFieldForCamera();
     } finally {
       this.updatingControlsProgrammatically = false;
     }
+  }
+
+  private beginCameraTransition(frame: ObservatoryCameraFrame): void {
+    const controls = this.controls;
+    if (controls === null) {
+      return;
+    }
+    const direction = this.camera.position.clone().sub(controls.target);
+    const startDistance = direction.length();
+    if (startDistance <= Number.EPSILON) {
+      this.applyCameraFrame(frame);
+      return;
+    }
+    direction.normalize();
+    this.cameraTransition = {
+      direction,
+      durationMilliseconds: computeCameraTransitionDurationMilliseconds(
+        startDistance,
+        frame.distance,
+      ),
+      endDistance: frame.distance,
+      endTarget: new Vector3(frame.target.x, frame.target.y, frame.target.z),
+      startDistance,
+      startTarget: controls.target.clone(),
+      startTimeMilliseconds: null,
+    };
+    this.cameraTransitionProgress = 0;
+  }
+
+  private updateCameraTransition(timestampMilliseconds: number): void {
+    const controls = this.controls;
+    const transition = this.cameraTransition;
+    if (controls === null || transition === null) {
+      return;
+    }
+    transition.startTimeMilliseconds ??= timestampMilliseconds;
+    const progress = Math.min(
+      1,
+      Math.max(
+        0,
+        (timestampMilliseconds - transition.startTimeMilliseconds) /
+          transition.durationMilliseconds,
+      ),
+    );
+    const eased = easeCameraTransitionProgress(progress);
+    const target = transition.startTarget.clone().lerp(transition.endTarget, eased);
+    const distance = interpolateCameraDistance(
+      transition.startDistance,
+      transition.endDistance,
+      eased,
+    );
+    this.updatingControlsProgrammatically = true;
+    const dampingEnabled = controls.enableDamping;
+    try {
+      controls.enableDamping = false;
+      controls.target.copy(target);
+      this.camera.position.copy(target).addScaledVector(transition.direction, distance);
+      controls.update();
+    } finally {
+      controls.enableDamping = dampingEnabled;
+      this.updatingControlsProgrammatically = false;
+    }
+    this.cameraTransitionProgress = progress;
+    if (progress >= 1) {
+      this.cameraTransition = null;
+      this.cameraTransitionProgress = 1;
+    }
+  }
+
+  private applyCameraNavigation(
+    tier: RenderScaleTier,
+    explicitFrame?: ObservatoryCameraFrame,
+  ): void {
+    const controls = this.controls;
+    if (controls === null) {
+      return;
+    }
+    const frame =
+      explicitFrame ??
+      (this.viewMode === 'focus'
+        ? (this.computeCurrentFocusFrame() ?? computeOverviewCameraFrame(this.camera.aspect))
+        : computeOverviewCameraFrame(this.camera.aspect));
+    const currentDistance = Math.max(
+      Number.EPSILON,
+      this.camera.position.distanceTo(controls.target),
+    );
+    const overviewDistance = computeOverviewCameraFrame(this.camera.aspect).distance;
+    const projectedRadiusPixels =
+      this.focusBodyId === null
+        ? undefined
+        : this.bodyVisuals.get(this.focusBodyId)?.observableProjectedRadiusPixels;
+    const settings = computeCameraNavigationSettings(
+      tier,
+      currentDistance,
+      frame,
+      overviewDistance,
+      projectedRadiusPixels !== undefined && projectedRadiusPixels > 0
+        ? projectedRadiusPixels
+        : undefined,
+    );
+    controls.dampingFactor = settings.dampingFactor;
+    controls.maxDistance = settings.maxDistance;
+    controls.minDistance =
+      this.cameraTransition === null
+        ? settings.minDistance
+        : Math.min(settings.minDistance, currentDistance * 0.9);
+    controls.rotateSpeed = settings.rotateSpeed;
+    controls.zoomSpeed = settings.zoomSpeed;
+    if (this.camera.near !== settings.near || this.camera.far !== settings.far) {
+      this.camera.near = settings.near;
+      this.camera.far = settings.far;
+      this.camera.updateProjectionMatrix();
+    }
+  }
+
+  private updateStarFieldForCamera(): void {
+    const scale = Math.max(1e-12, this.camera.far / 320);
+    this.starField.position.copy(this.camera.position);
+    this.starField.scale.setScalar(scale);
+    this.starField.material.size = 0.085 * scale;
   }
 
   private updateVisibleScreenMarkers(timestampMilliseconds: number): void {
@@ -1243,7 +1555,7 @@ export class ObservatoryScene {
     for (const visual of this.bodyVisuals.values()) {
       const focusedBodyIsVisibleWithoutMarker =
         visual.bodyId === this.focusBodyId &&
-        visual.projectedRadiusPixels >= RENDER_SCALE_THRESHOLDS.orbit.exitPixels;
+        visual.observableProjectedRadiusPixels >= RENDER_SCALE_THRESHOLDS.orbit.exitPixels;
       visual.markerRing.visible =
         visibleIds.has(visual.bodyId) && !focusedBodyIsVisibleWithoutMarker;
     }
@@ -1271,6 +1583,39 @@ export class ObservatoryScene {
     const canvas = this.renderer.domElement;
     canvas.dataset.renderFrameCount = String(this.renderFrameCount);
     canvas.dataset.renderScaleTier = this.renderScaleTier;
+    const cameraTarget = this.controls?.target ?? new Vector3();
+    canvas.dataset.visualCameraState = JSON.stringify({
+      distance: Number(this.camera.position.distanceTo(cameraTarget).toPrecision(8)),
+      far: Number(this.camera.far.toPrecision(8)),
+      maxDistance: Number((this.controls?.maxDistance ?? 0).toPrecision(8)),
+      minDistance: Number((this.controls?.minDistance ?? 0).toPrecision(8)),
+      near: Number(this.camera.near.toPrecision(8)),
+      position: vectorDiagnostic(this.camera.position),
+      rotateSpeed: this.controls?.rotateSpeed ?? 0,
+      target: vectorDiagnostic(cameraTarget),
+      transitionActive: this.cameraTransition !== null,
+      transitionEndTarget:
+        this.cameraTransition === null ? null : vectorDiagnostic(this.cameraTransition.endTarget),
+      transitionProgress: Number(this.cameraTransitionProgress.toFixed(4)),
+      zoomSpeed: this.controls?.zoomSpeed ?? 0,
+    });
+    const focusedLocalPosition =
+      this.focusBodyId === null
+        ? null
+        : (this.bodyVisuals.get(this.focusBodyId)?.root.position ?? null);
+    canvas.dataset.visualOriginState = JSON.stringify({
+      bodyId: this.sceneOriginBodyId,
+      focusedLocalPosition:
+        focusedLocalPosition === null ? null : vectorDiagnostic(focusedLocalPosition),
+      maxLocalMagnitude: Number(
+        Math.max(
+          0,
+          ...[...this.bodyVisuals.values()].map((visual) => visual.root.position.length()),
+        ).toPrecision(8),
+      ),
+      originMeters: this.sceneOriginMeters,
+    });
+    canvas.dataset.visualScaleHistory = JSON.stringify(this.renderScaleHistory);
     canvas.dataset.visualActiveLightCount = String(activeLightCount);
     canvas.dataset.visualActiveLightIds = JSON.stringify(
       [...this.bodyVisuals.values()]
@@ -1356,6 +1701,30 @@ export class ObservatoryScene {
           }),
         })),
     );
+    canvas.dataset.visualBlackHoleResources = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => visual.blackHole !== null)
+        .map((visual) => {
+          const blackHole = visual.blackHole;
+          if (blackHole === null) {
+            throw new Error('黑洞诊断缺少视觉对象');
+          }
+          return {
+            accretionDiskVisible: false,
+            haloVisible: blackHole.haloSprite?.visible ?? false,
+            id: visual.bodyId,
+            mode: blackHole.mode,
+            observableOuterRadiusRatio: blackHole.profile.observableOuterRadiusRatio,
+            observableProjectedRadiusPixels: Number(
+              visual.observableProjectedRadiusPixels.toFixed(3),
+            ),
+            photonRingVisible: blackHole.photonRingSprite.visible && blackHole.group.visible,
+            physicalProjectedRadiusPixels: Number(visual.projectedRadiusPixels.toFixed(3)),
+            visible: blackHole.group.visible,
+          };
+        })
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    );
     canvas.dataset.visualResourceCounts = JSON.stringify({
       atmosphereShells: [...this.bodyVisuals.values()].reduce(
         (count, visual) => count + (visual.environment?.atmosphereShells.length ?? 0),
@@ -1365,8 +1734,16 @@ export class ObservatoryScene {
         (visual) => (visual.environment?.clouds ?? null) !== null,
       ).length,
       cloudShadows: [...this.bodyVisuals.values()].filter(
-        (visual) => visual.environment?.clouds?.shadowMesh.visible === true,
+        (visual) => (visual.environment?.clouds?.shadowMesh ?? null) !== null,
       ).length,
+      blackHoleEffects: [...this.bodyVisuals.values()].filter((visual) => visual.blackHole !== null)
+        .length,
+      blackHoleSprites: [...this.bodyVisuals.values()].reduce(
+        (count, visual) =>
+          count +
+          (visual.blackHole === null ? 0 : 1 + (visual.blackHole.haloSprite === null ? 0 : 1)),
+        0,
+      ),
       planetaryRingMeshes: [...this.bodyVisuals.values()].filter(
         (visual) => visual.planetaryRing !== null,
       ).length,
@@ -1479,6 +1856,14 @@ function emptyBodyLightingObservation(): BodyLightingObservation {
 
 function clampUnit(value: number): number {
   return Math.min(1, Math.max(0, value));
+}
+
+function vectorDiagnostic(vector: { readonly x: number; readonly y: number; readonly z: number }) {
+  return {
+    x: Number(vector.x.toPrecision(8)),
+    y: Number(vector.y.toPrecision(8)),
+    z: Number(vector.z.toPrecision(8)),
+  };
 }
 
 function createStarField(): Points<BufferGeometry, PointsMaterial> {

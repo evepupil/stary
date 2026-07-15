@@ -38,6 +38,7 @@ export function UniverseViewport({
 }: UniverseViewportProps): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ObservatoryScene | null>(null);
+  const pendingFocusBodyIdRef = useRef<string | null>(null);
   const bodiesRef = useRef(bodies);
   const creationStateRef = useRef(creationState);
   const focusBodyIdRef = useRef(focusBodyId);
@@ -52,9 +53,11 @@ export function UniverseViewport({
     bodiesRef.current = bodies;
     selectedBodyIdRef.current = selectedBodyId;
     simulationTimeSecondsRef.current = simulationTimeSeconds;
-    sceneRef.current?.update(bodies, selectedBodyId, simulationTimeSeconds);
-    if (focusBodyIdRef.current !== null) {
-      sceneRef.current?.focusBody(focusBodyIdRef.current);
+    const scene = sceneRef.current;
+    scene?.update(bodies, selectedBodyId, simulationTimeSeconds);
+    const pendingFocusBodyId = pendingFocusBodyIdRef.current;
+    if (scene !== null && pendingFocusBodyId !== null && scene.focusBody(pendingFocusBodyId)) {
+      pendingFocusBodyIdRef.current = null;
     }
   }, [bodies, selectedBodyId, simulationTimeSeconds]);
 
@@ -66,9 +69,12 @@ export function UniverseViewport({
   useEffect(() => {
     focusBodyIdRef.current = focusBodyId;
     if (focusBodyId === null) {
+      pendingFocusBodyIdRef.current = null;
       sceneRef.current?.showOverview();
+    } else if (sceneRef.current?.focusBody(focusBodyId) === true) {
+      pendingFocusBodyIdRef.current = null;
     } else {
-      sceneRef.current?.focusBody(focusBodyId);
+      pendingFocusBodyIdRef.current = focusBodyId;
     }
   }, [focusBodyId]);
 
@@ -122,9 +128,12 @@ export function UniverseViewport({
           simulationTimeSecondsRef.current,
         );
         if (focusBodyIdRef.current === null) {
+          pendingFocusBodyIdRef.current = null;
           scene.showOverview();
+        } else if (scene.focusBody(focusBodyIdRef.current)) {
+          pendingFocusBodyIdRef.current = null;
         } else {
-          scene.focusBody(focusBodyIdRef.current);
+          pendingFocusBodyIdRef.current = focusBodyIdRef.current;
         }
         scene.setCreationState(creationStateRef.current);
         onBackendChangeRef.current?.(backend);

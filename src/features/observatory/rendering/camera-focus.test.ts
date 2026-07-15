@@ -24,6 +24,7 @@ describe('observatory camera focus', () => {
     expect(frame.target).toEqual({ x: 0, y: 0, z: 0 });
     expect(frame.halfExtent).toBe(10);
     expect(frame.distance).toBeGreaterThan(10);
+    expect(frame.tier).toBe('system');
   });
 
   it('聚焦行星时以父级和天体的中点取景并容纳两者', () => {
@@ -34,6 +35,7 @@ describe('observatory camera focus', () => {
     expect(frame.target).toEqual({ x: 5, y: 0, z: 0 });
     expect(frame.halfExtent).toBeGreaterThan(5);
     expect(frame.distance).toBeGreaterThan(frame.halfExtent);
+    expect(frame.tier).toBe('orbit');
   });
 
   it('极短的卫星轨道仍获得正数取景范围', () => {
@@ -55,6 +57,18 @@ describe('observatory camera focus', () => {
     expect(bodyFrame.halfExtent).toBeCloseTo(0.00021, 12);
     expect(ringFrame.halfExtent).toBeCloseTo(bodyFrame.halfExtent * 2.27, 12);
     expect(ringFrame.distance).toBeGreaterThan(bodyFrame.distance);
+    expect(ringFrame.minimumDistance).toBeCloseTo(0.0001 * 2.27 * 1.03, 12);
+    expect(ringFrame.tier).toBe('surface');
     expect(() => computeBodyInspectionCameraFrame(saturn, 1, 1, 0)).toThrow(RangeError);
+  });
+
+  it('近景取景相对渲染原点保持局部目标坐标', () => {
+    const blackHole = createBody('black-hole', 4.5e12 + 15_000, 15_000);
+    const origin = { x: blackHole.positionMeters.x, y: 0, z: 0 };
+    const frame = computeBodyInspectionCameraFrame(blackHole, 1e-12, 16 / 9, 3.25, origin);
+
+    expect(frame.target).toEqual({ x: 0, y: 0, z: 0 });
+    expect(frame.distance).toBeGreaterThan(frame.minimumDistance);
+    expect(frame.minimumDistance).toBeGreaterThan(0);
   });
 });

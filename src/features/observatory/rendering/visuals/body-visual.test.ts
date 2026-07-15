@@ -183,6 +183,35 @@ describe('body visual resources', () => {
     disposeBodyVisual(scene, visual);
   });
 
+  it('黑洞保留真实事件视界球并挂载可观察暗核与光子环', () => {
+    const scene = new Scene();
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        baseColor: 0x020204,
+        bodyId: 'created-black-hole-1',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        structureKey: 'black-hole:v1:1',
+        surfaceKind: 'black-hole',
+        temperatureKelvin: null,
+      }),
+      'webgl2',
+      false,
+      'high',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+    );
+
+    expect(visual.blackHole?.mode).toBe('webgl2-ring');
+    expect(visual.blackHole?.profile.eventHorizonRadiusRatio).toBe(1);
+    expect(visual.blackHole?.profile.accretionDisk).toBeNull();
+    expect(visual.root.children).toContain(visual.blackHole?.group);
+
+    disposeBodyVisual(scene, visual);
+  });
+
   it('恒星被遮挡时按可见比例压低非恒星地表明暗', () => {
     const scene = new Scene();
     const visual = createBodyVisual(
