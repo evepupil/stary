@@ -21,6 +21,7 @@ export interface UniverseViewportProps {
   readonly onCreationPlacementChange?: (placement: CreationPlacement) => void;
   readonly onSelectBody: (bodyId: string) => void;
   readonly selectedBodyId: string | null;
+  readonly simulationTimeSeconds: number;
 }
 
 export function UniverseViewport({
@@ -33,6 +34,7 @@ export function UniverseViewport({
   onCreationPlacementChange,
   onSelectBody,
   selectedBodyId,
+  simulationTimeSeconds,
 }: UniverseViewportProps): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ObservatoryScene | null>(null);
@@ -40,6 +42,7 @@ export function UniverseViewport({
   const creationStateRef = useRef(creationState);
   const focusBodyIdRef = useRef(focusBodyId);
   const selectedBodyIdRef = useRef(selectedBodyId);
+  const simulationTimeSecondsRef = useRef(simulationTimeSeconds);
   const onBackendChangeRef = useRef(onBackendChange);
   const onErrorRef = useRef(onError);
   const onCreationPlacementChangeRef = useRef(onCreationPlacementChange);
@@ -48,11 +51,12 @@ export function UniverseViewport({
   useEffect(() => {
     bodiesRef.current = bodies;
     selectedBodyIdRef.current = selectedBodyId;
-    sceneRef.current?.update(bodies, selectedBodyId);
+    simulationTimeSecondsRef.current = simulationTimeSeconds;
+    sceneRef.current?.update(bodies, selectedBodyId, simulationTimeSeconds);
     if (focusBodyIdRef.current !== null) {
       sceneRef.current?.focusBody(focusBodyIdRef.current);
     }
-  }, [bodies, selectedBodyId]);
+  }, [bodies, selectedBodyId, simulationTimeSeconds]);
 
   useEffect(() => {
     creationStateRef.current = creationState;
@@ -112,7 +116,11 @@ export function UniverseViewport({
         });
         rendererToDispose = null;
         sceneRef.current = scene;
-        scene.update(bodiesRef.current, selectedBodyIdRef.current);
+        scene.update(
+          bodiesRef.current,
+          selectedBodyIdRef.current,
+          simulationTimeSecondsRef.current,
+        );
         if (focusBodyIdRef.current === null) {
           scene.showOverview();
         } else {

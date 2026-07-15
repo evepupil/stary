@@ -32,21 +32,26 @@ describe('planetary texture asset manifest', () => {
     });
     expect(saturn.ring?.opacityAsset.role).toBe('ring-opacity');
     expect(resolveBodyAssetPlan('earth').ring).toBeNull();
+    expect(resolveBodyAssetPlan('earth').clouds?.opacityAsset).toMatchObject({
+      id: 'earth-cloud-opacity',
+      role: 'cloud-opacity',
+    });
   });
 
   it('让动态和未知天体继续使用确定性程序化回退', () => {
     expect(resolveBodyAssetPlan('created:rocky-planet:1')).toEqual({
+      clouds: null,
       ring: null,
       surface: null,
     });
-    expect(resolveBodyAssetPlan('unknown')).toEqual({ ring: null, surface: null });
+    expect(resolveBodyAssetPlan('unknown')).toEqual({ clouds: null, ring: null, surface: null });
   });
 
-  it('清单使用单一 CC BY 4.0 来源并锁定 11 个唯一文件', () => {
+  it('清单使用单一 CC BY 4.0 来源并锁定 12 个唯一文件', () => {
     expect(PLANETARY_TEXTURE_ASSET_MANIFEST.license.id).toBe('CC-BY-4.0');
-    expect(PLANETARY_TEXTURE_ASSET_MANIFEST.assets).toHaveLength(11);
+    expect(PLANETARY_TEXTURE_ASSET_MANIFEST.assets).toHaveLength(12);
     expect(new Set(PLANETARY_TEXTURE_ASSET_MANIFEST.assets.map((asset) => asset.file)).size).toBe(
-      11,
+      12,
     );
     expect(getTextureAssetDescriptor('earth-surface').url).toBe('/assets/planetary/earth.webp');
     expect(() => getTextureAssetDescriptor('missing')).toThrow('未知纹理资产');

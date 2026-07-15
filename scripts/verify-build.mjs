@@ -72,8 +72,24 @@ function readPlanetaryAssets(manifest) {
   if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.assets)) {
     throw new Error('planetary-assets.json 结构无效');
   }
-  if (manifest.assets.length !== 11) {
-    throw new Error(`应锁定 11 个行星画面资产，实际为 ${manifest.assets.length} 个`);
+  const requiredAssetIds = new Set([
+    'sun-surface',
+    'mercury-surface',
+    'venus-surface',
+    'earth-surface',
+    'earth-cloud-opacity',
+    'moon-surface',
+    'mars-surface',
+    'jupiter-surface',
+    'saturn-surface',
+    'uranus-surface',
+    'neptune-surface',
+    'saturn-ring-opacity',
+  ]);
+  if (manifest.assets.length !== requiredAssetIds.size) {
+    throw new Error(
+      `应锁定 ${requiredAssetIds.size} 个行星画面资产，实际为 ${manifest.assets.length} 个`,
+    );
   }
   const ids = new Set();
   const files = new Set();
@@ -99,6 +115,10 @@ function readPlanetaryAssets(manifest) {
     }
     ids.add(asset.id);
     files.add(asset.file);
+    requiredAssetIds.delete(asset.id);
+  }
+  if (requiredAssetIds.size > 0) {
+    throw new Error(`行星画面资产缺少必需 ID: ${[...requiredAssetIds].join(', ')}`);
   }
   return manifest.assets;
 }

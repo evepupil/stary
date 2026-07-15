@@ -42,7 +42,7 @@ export const loadBrowserTextureAsset: TextureAssetLoader = async (descriptor, si
     const texture = new Texture(bitmap);
     texture.name = descriptor.id;
     texture.colorSpace = descriptor.role === 'surface-color' ? SRGBColorSpace : NoColorSpace;
-    texture.wrapS = descriptor.role === 'surface-color' ? RepeatWrapping : ClampToEdgeWrapping;
+    texture.wrapS = descriptor.role === 'ring-opacity' ? ClampToEdgeWrapping : RepeatWrapping;
     texture.wrapT = ClampToEdgeWrapping;
     texture.magFilter = LinearFilter;
     texture.minFilter = LinearMipmapLinearFilter;

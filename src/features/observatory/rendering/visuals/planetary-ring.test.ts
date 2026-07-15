@@ -5,6 +5,7 @@ import {
   applyRadialRingUvs,
   createPlanetaryRingVisual,
   disposePlanetaryRingVisual,
+  updatePlanetaryRingShadow,
 } from './planetary-ring';
 
 describe('planetary ring visual', () => {
@@ -25,6 +26,34 @@ describe('planetary ring visual', () => {
     expect(visual.mesh.rotation.x).toBeCloseTo((26.73 * Math.PI) / 180, 8);
     expect(visual.innerRadiusRatio).toBe(1.24);
     expect(visual.outerRadiusRatio).toBe(2.27);
+    const tilt = (visual.axialTiltDegrees * Math.PI) / 180;
+    const ringNormal = { x: 0, y: -Math.sin(tilt), z: Math.cos(tilt) };
+    updatePlanetaryRingShadow(visual, ringNormal);
+    expect(visual.shadowMesh.visible).toBe(false);
+    expect(visual.shadowMesh.material.opacity).toBe(0);
+    expect(visual.shadowLatitudeOffset).toBeCloseTo(0.075, 8);
+    updatePlanetaryRingShadow(visual, { x: 1, y: 0, z: 0 });
+    expect(visual.shadowMesh.visible).toBe(false);
+    expect(visual.shadowMesh.material.opacity).toBe(0);
+    const intermediateIncidence = 1 / visual.innerRadiusRatio / 2;
+    const tangentMagnitude = Math.sqrt(1 - intermediateIncidence ** 2);
+    const intermediateDirection = {
+      x: tangentMagnitude,
+      y: ringNormal.y * intermediateIncidence,
+      z: ringNormal.z * intermediateIncidence,
+    };
+    updatePlanetaryRingShadow(visual, intermediateDirection);
+    expect(visual.shadowMesh.visible).toBe(true);
+    expect(visual.shadowMesh.material.opacity).toBeCloseTo(0.32, 8);
+    expect(visual.shadowLatitudeOffset).toBeGreaterThan(0);
+    updatePlanetaryRingShadow(visual, {
+      x: tangentMagnitude,
+      y: -ringNormal.y * intermediateIncidence,
+      z: -ringNormal.z * intermediateIncidence,
+    });
+    expect(visual.shadowLatitudeOffset).toBeLessThan(0);
+    updatePlanetaryRingShadow(visual, null);
+    expect(visual.shadowMesh.visible).toBe(false);
     disposePlanetaryRingVisual(visual);
   });
 
@@ -35,10 +64,16 @@ describe('planetary ring visual', () => {
     const visual = createPlanetaryRingVisual(ringPlan, 'webgl2');
     const geometryDispose = vi.fn();
     const materialDispose = vi.fn();
+    const shadowGeometryDispose = vi.fn();
+    const shadowMaterialDispose = vi.fn();
+    const shadowTextureDispose = vi.fn();
     const textureDispose = vi.fn();
     visual.mesh.geometry.addEventListener('dispose', geometryDispose);
     visual.mesh.material.addEventListener('dispose', materialDispose);
     visual.fallbackAlphaMap.addEventListener('dispose', textureDispose);
+    visual.shadowMesh.geometry.addEventListener('dispose', shadowGeometryDispose);
+    visual.shadowMesh.material.addEventListener('dispose', shadowMaterialDispose);
+    visual.shadowMap.addEventListener('dispose', shadowTextureDispose);
 
     expect(() => {
       applyRadialRingUvs(visual.mesh.geometry, 2, 1);
@@ -47,5 +82,11 @@ describe('planetary ring visual', () => {
     expect(geometryDispose).toHaveBeenCalledOnce();
     expect(materialDispose).toHaveBeenCalledOnce();
     expect(textureDispose).toHaveBeenCalledOnce();
+    expect(shadowGeometryDispose).toHaveBeenCalledOnce();
+    expect(shadowMaterialDispose).toHaveBeenCalledOnce();
+    expect(shadowTextureDispose).toHaveBeenCalledOnce();
+    expect(() => {
+      updatePlanetaryRingShadow(visual, { x: 0, y: 0, z: 0 });
+    }).toThrow(RangeError);
   });
 });

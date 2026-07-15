@@ -27,6 +27,7 @@ import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import type { BodyState } from '../../../physics/protocol/schemas';
 import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import { getCelestialCatalogEntry } from '../catalog';
+import { advanceAdaptiveExposure, computeTargetExposure } from './adaptive-exposure';
 import { resolveBodyAssetPlan } from './assets/body-asset-plan';
 import { TextureAssetCache } from './assets/texture-cache';
 import {
@@ -52,11 +53,17 @@ import {
 } from './coordinates';
 import { computeMinimumBillboardWorldRadius, OBSERVATORY_VERTICAL_FOV_DEGREES } from './camera-fit';
 import {
+  OBSERVATORY_TONE_MAPPING_EXPOSURE,
   disposeObservatoryRenderer,
   renderObservatoryFrame,
   type ObservatoryRenderer,
   type RendererBackend,
 } from './create-renderer';
+import {
+  computeCombinedStellarTransmission,
+  computeStellarVisibility,
+  type StellarIlluminationSample,
+} from './lighting/stellar-occlusion';
 import { sampleOsculatingOrbit } from './orbit';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
 import { resolveBodyAppearance, selectActiveStellarLightIds } from './appearance/body-appearance';
@@ -74,13 +81,21 @@ import {
   type RenderScaleTier,
 } from './render-scale';
 import {
+  updateBodyEnvironmentLighting,
+  updateBodyEnvironmentScale,
+  updateBodyEnvironmentTime,
+  updateBodyEnvironmentVisibility,
+} from './visuals/body-environment';
+import {
   createBodyVisual,
   disposeBodyVisual,
   isBodyVisualCompatible,
   updateBodyVisualAppearance,
   updateBodyVisualLod,
+  updateBodyVisualStellarVisibility,
   type BodyVisual,
 } from './visuals/body-visual';
+import { updatePlanetaryRingShadow } from './visuals/planetary-ring';
 
 const STAR_COUNT = 1_600;
 const ORBIT_SEGMENTS = 256;
@@ -88,6 +103,7 @@ const MARKER_MINIMUM_SEPARATION_PIXELS = 18;
 const MARKER_HIT_RADIUS_PIXELS = 20;
 const MARKER_DIAGNOSTICS_QUERY_PARAMETER = 'markerDiagnostics';
 const VISUAL_DIAGNOSTICS_QUERY_PARAMETER = 'visualDiagnostics';
+const CLOUD_SHADOWS_QUERY_PARAMETER = 'cloudShadows';
 const MARKER_DIAGNOSTICS_INTERVAL_MILLISECONDS = 100;
 const CREATION_VELOCITY_DRAG_SECONDS = 10_000_000;
 
@@ -119,6 +135,15 @@ interface CreationBodyVisual {
   physicalRadiusSceneUnits: number;
 }
 
+interface BodyLightingObservation {
+  readonly dominantStarId: string | null;
+  readonly illuminatedFraction: number;
+  readonly illuminance: number;
+  readonly lightDirection: Vector3 | null;
+  readonly occluderIds: readonly string[];
+  readonly stellarVisibility: number;
+}
+
 export interface ObservatorySceneOptions {
   readonly backend: RendererBackend;
   readonly mount: HTMLDivElement;
@@ -140,6 +165,8 @@ export class ObservatoryScene {
     string,
     Line<BufferGeometry, LineBasicMaterial>
   >();
+  private readonly cloudShadowsEnabled =
+    new URLSearchParams(window.location.search).get(CLOUD_SHADOWS_QUERY_PARAMETER) !== '0';
   private readonly creationVelocityArrow = new ArrowHelper(
     new Vector3(1, 0, 0),
     new Vector3(),
@@ -170,10 +197,14 @@ export class ObservatoryScene {
   private creationPointerId: number | null = null;
   private creationState: CreationOverlayState | null = null;
   private disposed = false;
+  private exposureTarget = OBSERVATORY_TONE_MAPPING_EXPOSURE;
   private focusBodyId: string | null = null;
+  private focusedLightingObservation: BodyLightingObservation | null = null;
   private lastDiagnosticsUpdateTimeMilliseconds = Number.NEGATIVE_INFINITY;
   private lastVisualDiagnosticsUpdateTimeMilliseconds = Number.NEGATIVE_INFINITY;
+  private lastExposureUpdateTimeMilliseconds: number | null = null;
   private latestBodies: readonly BodyState[] = [];
+  private latestSimulationTimeSeconds = 0;
   private metersToSceneUnit = 1;
   private pointerDownPosition: Vector2 | null = null;
   private selectedBodyId: string | null = null;
@@ -236,13 +267,21 @@ export class ObservatoryScene {
     }
   }
 
-  update(bodies: readonly BodyState[], selectedBodyId: string | null): void {
+  update(
+    bodies: readonly BodyState[],
+    selectedBodyId: string | null,
+    simulationTimeSeconds = 0,
+  ): void {
     if (this.disposed) {
       return;
+    }
+    if (!Number.isFinite(simulationTimeSeconds) || simulationTimeSeconds < 0) {
+      throw new RangeError('simulationTimeSeconds 必须是非负有限数');
     }
 
     this.selectedBodyId = selectedBodyId;
     this.latestBodies = bodies;
+    this.latestSimulationTimeSeconds = simulationTimeSeconds;
     const primary = findMostMassiveBody(bodies);
     const nextBodySetKey = bodies
       .map((body) => body.id)
@@ -295,6 +334,9 @@ export class ObservatoryScene {
       visual.isPrimary = isPrimary;
       updateBodyVisualAppearance(visual, appearance, this.metersToSceneUnit);
       this.updateBodyVisualTransform(visual, body);
+      if (visual.environment !== null) {
+        updateBodyEnvironmentTime(visual.environment, this.latestSimulationTimeSeconds);
+      }
     }
 
     this.updateOrbits(bodies);
@@ -413,6 +455,10 @@ export class ObservatoryScene {
     visual.mesh.scale.setScalar(physicalRadiusSceneUnits);
     visual.halo?.scale.set(physicalRadiusSceneUnits * 3.2, physicalRadiusSceneUnits * 3.2, 1);
     visual.planetaryRing?.mesh.scale.setScalar(physicalRadiusSceneUnits);
+    visual.planetaryRing?.shadowMesh.scale.setScalar(physicalRadiusSceneUnits * 1.0015);
+    if (visual.environment !== null) {
+      updateBodyEnvironmentScale(visual.environment, physicalRadiusSceneUnits);
+    }
     visual.mesh.userData.physicalRadiusMeters = body.radiusMeters;
     visual.physicalRadiusSceneUnits = physicalRadiusSceneUnits;
 
@@ -507,6 +553,7 @@ export class ObservatoryScene {
         this.controls?.update();
       }
       let focusedProjectedRadiusPixels = 0;
+      let focusedLightingObservation: BodyLightingObservation | null = null;
       for (const visual of this.bodyVisuals.values()) {
         const cameraDistance = Math.max(
           Number.EPSILON,
@@ -524,6 +571,37 @@ export class ObservatoryScene {
         const nextLod =
           projectedRadiusPixels > 0 ? selectBodyLod(projectedRadiusPixels, visual.lod) : 'low';
         visual.projectedRadiusPixels = projectedRadiusPixels;
+        const requiresLightingObservation =
+          visual.environment !== null ||
+          visual.planetaryRing !== null ||
+          visual.bodyId === this.focusBodyId;
+        const lightingObservation = requiresLightingObservation
+          ? this.computeBodyLightingObservation(visual.bodyId)
+          : null;
+        if (lightingObservation !== null) {
+          updateBodyVisualStellarVisibility(visual, lightingObservation.stellarVisibility);
+        } else if (visual.stellarVisibility !== 1) {
+          updateBodyVisualStellarVisibility(visual, 1);
+        }
+        if (visual.environment !== null) {
+          updateBodyEnvironmentVisibility(
+            visual.environment,
+            projectedRadiusPixels,
+            this.cloudShadowsEnabled,
+          );
+          updateBodyEnvironmentLighting(
+            visual.environment,
+            lightingObservation?.illuminatedFraction ?? 0,
+            lightingObservation?.stellarVisibility ?? 0,
+            lightingObservation?.lightDirection ?? null,
+          );
+        }
+        if (visual.planetaryRing !== null) {
+          updatePlanetaryRingShadow(
+            visual.planetaryRing,
+            lightingObservation?.lightDirection ?? null,
+          );
+        }
         if (
           visual.bodyId === this.focusBodyId ||
           projectedRadiusPixels >= BODY_LOD_THRESHOLDS.medium.defaultPixels
@@ -533,6 +611,7 @@ export class ObservatoryScene {
         updateBodyVisualLod(visual, nextLod, this.backend);
         if (visual.bodyId === this.focusBodyId) {
           focusedProjectedRadiusPixels = projectedRadiusPixels;
+          focusedLightingObservation = lightingObservation;
         }
         visual.markerRing.quaternion.copy(this.camera.quaternion);
         const minimumWorldRadius = computeMinimumBillboardWorldRadius(
@@ -548,6 +627,8 @@ export class ObservatoryScene {
         focusedProjectedRadiusPixels > 0
           ? selectRenderScaleTier(focusedProjectedRadiusPixels, this.renderScaleTier)
           : 'system';
+      this.focusedLightingObservation = focusedLightingObservation;
+      this.updateAdaptiveExposure(timestampMilliseconds, focusedLightingObservation);
       for (const visual of this.creationBodyVisuals.values()) {
         const minimumWorldRadius = computeMinimumBillboardWorldRadius(
           this.camera.position.distanceTo(visual.mesh.position),
@@ -921,6 +1002,99 @@ export class ObservatoryScene {
     return maximumOffset;
   }
 
+  private computeBodyLightingObservation(bodyId: string): BodyLightingObservation {
+    const targetBody = this.latestBodies.find((body) => body.id === bodyId);
+    const targetVisual = this.bodyVisuals.get(bodyId);
+    if (targetBody === undefined || targetVisual === undefined) {
+      return emptyBodyLightingObservation();
+    }
+
+    let dominant:
+      | {
+          readonly direction: Vector3;
+          readonly illuminance: number;
+          readonly starId: string;
+        }
+      | undefined;
+    const illuminationSamples: StellarIlluminationSample[] = [];
+    const occluderIds = new Set<string>();
+    for (const starVisual of this.bodyVisuals.values()) {
+      if (starVisual.light === null || starVisual.bodyId === bodyId) {
+        continue;
+      }
+      const starBody = this.latestBodies.find((body) => body.id === starVisual.bodyId);
+      if (starBody === undefined) {
+        continue;
+      }
+      const direction = starVisual.root.position.clone().sub(targetVisual.root.position);
+      const distanceSquared = direction.lengthSq();
+      if (distanceSquared <= Number.EPSILON) {
+        continue;
+      }
+      const occlusion = computeStellarVisibility(targetBody, starBody, this.latestBodies);
+      const unoccludedIlluminance = starVisual.light.intensity / distanceSquared;
+      const illuminance = unoccludedIlluminance * occlusion.visibility;
+      illuminationSamples.push({
+        unoccludedIlluminance,
+        visibility: occlusion.visibility,
+      });
+      for (const occluderId of occlusion.occluderIds) {
+        occluderIds.add(occluderId);
+      }
+      if (
+        dominant === undefined ||
+        illuminance > dominant.illuminance ||
+        (illuminance === dominant.illuminance && starVisual.bodyId < dominant.starId)
+      ) {
+        dominant = {
+          direction: direction.normalize(),
+          illuminance,
+          starId: starVisual.bodyId,
+        };
+      }
+    }
+    if (dominant === undefined) {
+      return emptyBodyLightingObservation();
+    }
+
+    const cameraDirection = this.camera.position
+      .clone()
+      .sub(targetVisual.root.position)
+      .normalize();
+    return {
+      dominantStarId: dominant.starId,
+      illuminatedFraction: clampUnit((cameraDirection.dot(dominant.direction) + 1) / 2),
+      illuminance: dominant.illuminance,
+      lightDirection: dominant.direction,
+      occluderIds: [...occluderIds].toSorted(),
+      stellarVisibility: computeCombinedStellarTransmission(illuminationSamples),
+    };
+  }
+
+  private updateAdaptiveExposure(
+    timestampMilliseconds: number,
+    lightingObservation: BodyLightingObservation | null,
+  ): void {
+    const focusedVisual =
+      this.focusBodyId === null ? undefined : this.bodyVisuals.get(this.focusBodyId);
+    this.exposureTarget = computeTargetExposure({
+      illuminatedFraction: lightingObservation?.illuminatedFraction ?? 0,
+      stellarVisibility: lightingObservation?.stellarVisibility ?? 0,
+      surfaceKind: focusedVisual?.surfaceKind ?? null,
+      viewMode: this.viewMode,
+    });
+    const previousTimestamp = this.lastExposureUpdateTimeMilliseconds;
+    this.lastExposureUpdateTimeMilliseconds = timestampMilliseconds;
+    if (previousTimestamp === null) {
+      return;
+    }
+    this.renderer.toneMappingExposure = advanceAdaptiveExposure(
+      this.renderer.toneMappingExposure,
+      this.exposureTarget,
+      Math.max(0, timestampMilliseconds - previousTimestamp) / 1_000,
+    );
+  }
+
   private computeCurrentFocusFrame(): ObservatoryCameraFrame | null {
     if (this.focusBodyId === null) {
       return null;
@@ -1098,6 +1272,12 @@ export class ObservatoryScene {
     canvas.dataset.renderFrameCount = String(this.renderFrameCount);
     canvas.dataset.renderScaleTier = this.renderScaleTier;
     canvas.dataset.visualActiveLightCount = String(activeLightCount);
+    canvas.dataset.visualActiveLightIds = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => visual.light !== null)
+        .map((visual) => visual.bodyId)
+        .toSorted(),
+    );
     canvas.dataset.visualAppearanceKinds = JSON.stringify(
       [...this.bodyVisuals.values()]
         .map((visual) => ({ id: visual.bodyId, kind: visual.surfaceKind }))
@@ -1115,6 +1295,49 @@ export class ObservatoryScene {
         }))
         .toSorted((left, right) => left.id.localeCompare(right.id)),
     );
+    canvas.dataset.visualAtmosphereResources = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => (visual.environment?.atmosphereShells.length ?? 0) > 0)
+        .map((visual) => {
+          const environment = visual.environment;
+          if (environment === null) {
+            throw new Error('大气诊断缺少环境对象');
+          }
+          return {
+            id: visual.bodyId,
+            layerCount: environment.atmosphereShells.length,
+            outerRadiusRatio: Math.max(
+              ...environment.profile.atmosphereLayers.map((layer) => layer.radiusRatio),
+            ),
+            visible: environment.atmosphereShells.some((shell) => shell.mesh.visible),
+          };
+        })
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    );
+    canvas.dataset.visualCloudResources = JSON.stringify(
+      [...this.bodyVisuals.values()]
+        .filter((visual) => (visual.environment?.clouds ?? null) !== null)
+        .map((visual) => {
+          const clouds = visual.environment?.clouds;
+          if (clouds === null || clouds === undefined) {
+            throw new Error('云层诊断缺少环境对象');
+          }
+          return {
+            id: visual.bodyId,
+            phaseRadians: Number(clouds.phaseRadians.toFixed(6)),
+            radiusRatio: clouds.profile.radiusRatio,
+            shadowRadiusRatio: clouds.profile.shadowRadiusRatio,
+            shadowVisible: clouds.shadowMesh.visible,
+            visible: clouds.cloudMesh.visible,
+            ...(visual.assetBinding?.diagnostics().clouds ?? {
+              assetId: null,
+              bound: false,
+              state: 'procedural',
+            }),
+          };
+        })
+        .toSorted((left, right) => left.id.localeCompare(right.id)),
+    );
     canvas.dataset.visualPlanetaryRingResources = JSON.stringify(
       [...this.bodyVisuals.values()]
         .filter((visual) => visual.planetaryRing !== null)
@@ -1122,6 +1345,9 @@ export class ObservatoryScene {
           id: visual.bodyId,
           innerRadiusRatio: visual.planetaryRing?.innerRadiusRatio ?? 0,
           outerRadiusRatio: visual.planetaryRing?.outerRadiusRatio ?? 0,
+          shadowOpacity: visual.planetaryRing?.shadowMesh.material.opacity ?? 0,
+          shadowLatitudeOffset: visual.planetaryRing?.shadowLatitudeOffset ?? 0,
+          shadowVisible: visual.planetaryRing?.shadowMesh.visible ?? false,
           visible: visual.planetaryRing?.mesh.visible ?? false,
           ...(visual.assetBinding?.diagnostics().ring ?? {
             assetId: null,
@@ -1131,6 +1357,16 @@ export class ObservatoryScene {
         })),
     );
     canvas.dataset.visualResourceCounts = JSON.stringify({
+      atmosphereShells: [...this.bodyVisuals.values()].reduce(
+        (count, visual) => count + (visual.environment?.atmosphereShells.length ?? 0),
+        0,
+      ),
+      cloudLayers: [...this.bodyVisuals.values()].filter(
+        (visual) => (visual.environment?.clouds ?? null) !== null,
+      ).length,
+      cloudShadows: [...this.bodyVisuals.values()].filter(
+        (visual) => visual.environment?.clouds?.shadowMesh.visible === true,
+      ).length,
       planetaryRingMeshes: [...this.bodyVisuals.values()].filter(
         (visual) => visual.planetaryRing !== null,
       ).length,
@@ -1188,6 +1424,21 @@ export class ObservatoryScene {
     );
     canvas.dataset.visualLodCounts = JSON.stringify(lodCounts);
     canvas.dataset.visualToneMappingExposure = String(this.renderer.toneMappingExposure);
+    canvas.dataset.visualExposureState = JSON.stringify({
+      current: Number(this.renderer.toneMappingExposure.toFixed(6)),
+      settled: Math.abs(this.renderer.toneMappingExposure - this.exposureTarget) < 0.01,
+      target: Number(this.exposureTarget.toFixed(6)),
+    });
+    canvas.dataset.visualStellarOcclusion = JSON.stringify({
+      bodyId: this.focusBodyId,
+      dominantStarId: this.focusedLightingObservation?.dominantStarId ?? null,
+      illuminatedFraction: Number(
+        (this.focusedLightingObservation?.illuminatedFraction ?? 0).toFixed(6),
+      ),
+      illuminance: Number((this.focusedLightingObservation?.illuminance ?? 0).toPrecision(8)),
+      occluderIds: this.focusedLightingObservation?.occluderIds ?? [],
+      visibility: Number((this.focusedLightingObservation?.stellarVisibility ?? 0).toFixed(6)),
+    });
     canvas.dataset.visualFocusedMarkerVisible = String(
       this.focusBodyId !== null &&
         (this.bodyVisuals.get(this.focusBodyId)?.markerRing.visible ?? false),
@@ -1213,6 +1464,21 @@ export class ObservatoryScene {
     this.textureCache.dispose();
     canvas.remove();
   }
+}
+
+function emptyBodyLightingObservation(): BodyLightingObservation {
+  return {
+    dominantStarId: null,
+    illuminatedFraction: 0,
+    illuminance: 0,
+    lightDirection: null,
+    occluderIds: [],
+    stellarVisibility: 0,
+  };
+}
+
+function clampUnit(value: number): number {
+  return Math.min(1, Math.max(0, value));
 }
 
 function createStarField(): Points<BufferGeometry, PointsMaterial> {

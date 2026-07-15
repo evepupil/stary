@@ -20,12 +20,18 @@ import {
 } from 'three';
 
 import type { BodyAppearanceProfile, BodySurfaceKind } from '../appearance/body-appearance';
+import { resolveBodyEnvironmentProfile } from '../appearance/body-environment';
 import type { BodyAssetPlan } from '../assets/body-asset-plan';
 import type { TextureAssetCache } from '../assets/texture-cache';
 import type { RendererBackend } from '../create-renderer';
 import { STELLAR_LIGHT_DISTANCE_DECAY, computeScaledStellarLightIntensity } from '../light-scale';
 import { getSphereSegments, type BodyLod } from '../render-scale';
 import { BodyVisualAssetBinding } from './body-visual-assets';
+import {
+  createBodyEnvironmentVisual,
+  disposeBodyEnvironmentVisual,
+  type BodyEnvironmentVisual,
+} from './body-environment';
 import {
   createPlanetaryRingVisual,
   disposePlanetaryRingVisual,
@@ -39,6 +45,7 @@ export interface BodyVisual {
   appearanceSignature: string;
   readonly assetBinding: BodyVisualAssetBinding | null;
   readonly bodyId: string;
+  readonly environment: BodyEnvironmentVisual | null;
   readonly halo: Sprite | null;
   readonly light: PointLight | null;
   readonly lightActive: boolean;
@@ -52,6 +59,7 @@ export interface BodyVisual {
   lod: BodyLod;
   physicalRadiusSceneUnits: number;
   projectedRadiusPixels: number;
+  stellarVisibility: number;
 }
 
 export function createBodyVisual(
@@ -67,7 +75,7 @@ export function createBodyVisual(
 ): BodyVisual {
   if (
     assetPlan !== undefined &&
-    (assetPlan.surface !== null || assetPlan.ring !== null) &&
+    (assetPlan.surface !== null || assetPlan.ring !== null || assetPlan.clouds !== null) &&
     textureCache === undefined
   ) {
     throw new Error('带纹理计划的天体缺少纹理缓存');
@@ -83,12 +91,21 @@ export function createBodyVisual(
   root.userData.bodyId = appearance.bodyId;
   root.add(mesh);
 
+  const environmentProfile = resolveBodyEnvironmentProfile(appearance.bodyId);
+  const environment =
+    environmentProfile === null
+      ? null
+      : createBodyEnvironmentVisual(environmentProfile, backend, appearance.structureSeed);
+  if (environment !== null) {
+    root.add(environment.group);
+  }
+
   const planetaryRing =
     assetPlan?.ring === null || assetPlan?.ring === undefined
       ? null
       : createPlanetaryRingVisual(assetPlan.ring, backend);
   if (planetaryRing !== null) {
-    root.add(planetaryRing.mesh);
+    root.add(planetaryRing.shadowMesh, planetaryRing.mesh);
   }
 
   const halo = createStarHalo(appearance);
@@ -122,13 +139,14 @@ export function createBodyVisual(
   const assetBinding =
     assetPlan === undefined || textureCache === undefined
       ? null
-      : new BodyVisualAssetBinding(material, planetaryRing, assetPlan, textureCache);
+      : new BodyVisualAssetBinding(material, environment, planetaryRing, assetPlan, textureCache);
 
   return {
     appearance,
     appearanceSignature: getAppearanceSignature(appearance),
     assetBinding,
     bodyId: appearance.bodyId,
+    environment,
     halo,
     light,
     lightActive,
@@ -140,6 +158,7 @@ export function createBodyVisual(
     planetaryRing,
     projectedRadiusPixels: 0,
     root,
+    stellarVisibility: 1,
     structureKey: appearance.structureKey,
     surfaceKind: appearance.surfaceKind,
   };
@@ -164,11 +183,7 @@ export function updateBodyVisualAppearance(
     applySurfaceVertexColors(visual.mesh.geometry, appearance);
     visual.appearanceSignature = appearanceSignature;
   }
-  visual.mesh.material.color.setHex(
-    appearance.surfaceKind === 'star' || visual.assetBinding?.hasSurfaceTexture() === true
-      ? 0xffffff
-      : appearance.baseColor,
-  );
+  applyBodySurfaceColor(visual);
   if (visual.mesh.material instanceof MeshStandardMaterial) {
     visual.mesh.material.roughness = appearance.roughness;
     visual.mesh.material.emissive.setHex(appearance.emissiveColor);
@@ -185,6 +200,17 @@ export function updateBodyVisualAppearance(
       metersToSceneUnit,
     );
   }
+}
+
+export function updateBodyVisualStellarVisibility(
+  visual: BodyVisual,
+  stellarVisibility: number,
+): void {
+  if (!Number.isFinite(stellarVisibility) || stellarVisibility < 0 || stellarVisibility > 1) {
+    throw new RangeError('stellarVisibility 必须在 0 到 1 之间');
+  }
+  visual.stellarVisibility = stellarVisibility;
+  applyBodySurfaceColor(visual);
 }
 
 export function updateBodyVisualLod(
@@ -211,6 +237,9 @@ export function disposeBodyVisual(scene: Scene, visual: BodyVisual): void {
   visual.mesh.material.dispose();
   visual.halo?.material.map?.dispose();
   visual.halo?.material.dispose();
+  if (visual.environment !== null) {
+    disposeBodyEnvironmentVisual(visual.environment);
+  }
   if (visual.planetaryRing !== null) {
     disposePlanetaryRingVisual(visual.planetaryRing);
   }
@@ -240,6 +269,17 @@ function createSurfaceMaterial(appearance: BodyAppearanceProfile): BodySurfaceMa
     metalness: 0,
     roughness: appearance.roughness,
   });
+}
+
+function applyBodySurfaceColor(visual: BodyVisual): void {
+  const baseColor =
+    visual.appearance.surfaceKind === 'star' || visual.assetBinding?.hasSurfaceTexture() === true
+      ? 0xffffff
+      : visual.appearance.baseColor;
+  visual.mesh.material.color.setHex(baseColor);
+  if (visual.mesh.material instanceof MeshStandardMaterial) {
+    visual.mesh.material.color.multiplyScalar(visual.stellarVisibility);
+  }
 }
 
 function getAppearanceSignature(appearance: BodyAppearanceProfile): string {

@@ -2,11 +2,17 @@ import type { MeshBasicMaterial, MeshStandardMaterial } from 'three';
 
 import type { BodyAssetPlan } from '../assets/body-asset-plan';
 import { TextureAssetCache, type TextureLease } from '../assets/texture-cache';
+import type { BodyEnvironmentVisual } from './body-environment';
 import type { PlanetaryRingVisual } from './planetary-ring';
 
 export type VisualAssetState = 'procedural' | 'idle' | 'loading' | 'ready' | 'fallback';
 
 export interface BodyVisualAssetDiagnostics {
+  readonly clouds: {
+    readonly assetId: string | null;
+    readonly bound: boolean;
+    readonly state: VisualAssetState;
+  };
   readonly ring: {
     readonly assetId: string | null;
     readonly bound: boolean;
@@ -22,6 +28,8 @@ export interface BodyVisualAssetDiagnostics {
 type SurfaceMaterial = MeshBasicMaterial | MeshStandardMaterial;
 
 export class BodyVisualAssetBinding {
+  private cloudLease: TextureLease | null = null;
+  private cloudState: VisualAssetState;
   private readonly controller = new AbortController();
   private disposed = false;
   private ringLease: TextureLease | null = null;
@@ -33,10 +41,12 @@ export class BodyVisualAssetBinding {
 
   constructor(
     private readonly material: SurfaceMaterial,
+    private readonly environment: BodyEnvironmentVisual | null,
     private readonly planetaryRing: PlanetaryRingVisual | null,
     private readonly plan: BodyAssetPlan,
     private readonly cache: TextureAssetCache,
   ) {
+    this.cloudState = plan.clouds === null ? 'procedural' : 'idle';
     this.surfaceState = plan.surface === null ? 'procedural' : 'idle';
     this.ringState = plan.ring === null ? 'procedural' : 'idle';
   }
@@ -46,13 +56,18 @@ export class BodyVisualAssetBinding {
       return;
     }
     this.started = true;
+    if (this.plan.clouds !== null) {
+      this.cloudState = 'loading';
+    }
     if (this.plan.surface !== null) {
       this.surfaceState = 'loading';
     }
     if (this.plan.ring !== null) {
       this.ringState = 'loading';
     }
-    this.settlePromise = Promise.all([this.loadSurface(), this.loadRing()]).then(() => undefined);
+    this.settlePromise = Promise.all([this.loadSurface(), this.loadRing(), this.loadClouds()]).then(
+      () => undefined,
+    );
   }
 
   whenSettled(): Promise<void> {
@@ -64,7 +79,16 @@ export class BodyVisualAssetBinding {
   }
 
   diagnostics(): BodyVisualAssetDiagnostics {
+    const clouds = this.environment?.clouds;
     return {
+      clouds: {
+        assetId: this.plan.clouds?.opacityAsset.id ?? null,
+        bound:
+          this.cloudLease !== null &&
+          clouds?.cloudMesh.material.alphaMap === this.cloudLease.texture &&
+          clouds.shadowMesh.material.alphaMap === this.cloudLease.texture,
+        state: this.cloudState,
+      },
       ring: {
         assetId: this.plan.ring?.opacityAsset.id ?? null,
         bound:
@@ -86,6 +110,19 @@ export class BodyVisualAssetBinding {
     }
     this.disposed = true;
     this.controller.abort();
+    if (this.cloudLease !== null) {
+      const clouds = this.environment?.clouds;
+      if (clouds?.cloudMesh.material.alphaMap === this.cloudLease.texture) {
+        clouds.cloudMesh.material.alphaMap = clouds.fallbackAlphaMap;
+        clouds.cloudMesh.material.needsUpdate = true;
+      }
+      if (clouds?.shadowMesh.material.alphaMap === this.cloudLease.texture) {
+        clouds.shadowMesh.material.alphaMap = clouds.fallbackAlphaMap;
+        clouds.shadowMesh.material.needsUpdate = true;
+      }
+      this.cloudLease.release();
+      this.cloudLease = null;
+    }
     if (this.surfaceLease !== null) {
       if (this.material.map === this.surfaceLease.texture) {
         this.material.map = null;
@@ -145,6 +182,31 @@ export class BodyVisualAssetBinding {
     } catch (error) {
       if (!this.disposed && !isAbortError(error)) {
         this.ringState = 'fallback';
+      }
+    }
+  }
+
+  private async loadClouds(): Promise<void> {
+    const descriptor = this.plan.clouds?.opacityAsset;
+    const clouds = this.environment?.clouds;
+    if (descriptor === undefined || clouds === null || clouds === undefined) {
+      return;
+    }
+    try {
+      const lease = await this.cache.acquire(descriptor, this.controller.signal);
+      if (this.disposed) {
+        lease.release();
+        return;
+      }
+      this.cloudLease = lease;
+      clouds.cloudMesh.material.alphaMap = lease.texture;
+      clouds.cloudMesh.material.needsUpdate = true;
+      clouds.shadowMesh.material.alphaMap = lease.texture;
+      clouds.shadowMesh.material.needsUpdate = true;
+      this.cloudState = 'ready';
+    } catch (error) {
+      if (!this.disposed && !isAbortError(error)) {
+        this.cloudState = 'fallback';
       }
     }
   }

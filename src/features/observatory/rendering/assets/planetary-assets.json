@@ -12,6 +12,7 @@
     "tool": "Pillow",
     "version": "12.2.0",
     "surface": "Resize 2048x1024 JPEG to 1024x512 with Lanczos; encode WebP quality 82, method 6, exact mode.",
+    "cloud": "Resize 2048x1024 JPEG to 1024x512 with Lanczos; encode WebP quality 82, method 6, exact mode for use as a grayscale opacity map.",
     "ring": "Resize 2048x125 PNG to 1024x63 with Lanczos; preserve PNG channels and optimize output."
   },
   "assets": [
@@ -84,6 +85,20 @@
       "sourceUrl": "https://www.solarsystemscope.com/textures/download/2k_moon.jpg",
       "sourceBytes": 1053869,
       "sourceSha256": "2764BA6535EA0481A062846EE033CC7A909DAE05B31A8FD13F3E98F3A7FD92BD"
+    },
+    {
+      "id": "earth-cloud-opacity",
+      "bodyId": "earth",
+      "role": "cloud-opacity",
+      "file": "earth-clouds.webp",
+      "url": "/assets/planetary/earth-clouds.webp",
+      "width": 1024,
+      "height": 512,
+      "bytes": 131818,
+      "sha256": "1E73F7E61223BB05B482E4488961A2923A1F7AB0F56573EE215A3ABFF2FD8E8F",
+      "sourceUrl": "https://www.solarsystemscope.com/textures/download/2k_earth_clouds.jpg",
+      "sourceBytes": 965676,
+      "sourceSha256": "FFFD7F68D41B37274822150E54A6EF605AF1D3EC35624D9F628C3B896BFA42ED"
     },
     {
       "id": "mars-surface",

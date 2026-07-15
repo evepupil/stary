@@ -15,6 +15,7 @@ import {
   isBodyVisualCompatible,
   updateBodyVisualAppearance,
   updateBodyVisualLod,
+  updateBodyVisualStellarVisibility,
 } from './body-visual';
 
 interface Deferred<T> {
@@ -182,6 +183,38 @@ describe('body visual resources', () => {
     disposeBodyVisual(scene, visual);
   });
 
+  it('恒星被遮挡时按可见比例压低非恒星地表明暗', () => {
+    const scene = new Scene();
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        baseColor: 0x80a0c0,
+        bodyId: 'planet',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        surfaceKind: 'rocky',
+      }),
+      'webgpu',
+      false,
+      'medium',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+    );
+    const fullLightRed = visual.mesh.material.color.r;
+
+    updateBodyVisualStellarVisibility(visual, 0.25);
+    expect(visual.stellarVisibility).toBe(0.25);
+    expect(visual.mesh.material.color.r).toBeCloseTo(fullLightRed * 0.25, 8);
+    updateBodyVisualStellarVisibility(visual, 1);
+    expect(visual.mesh.material.color.r).toBeCloseTo(fullLightRed, 8);
+    expect(() => {
+      updateBodyVisualStellarVisibility(visual, -0.01);
+    }).toThrow(RangeError);
+
+    disposeBodyVisual(scene, visual);
+  });
+
   it('异步绑定土星表面和实体环，并让 LOD 切换复用纹理租约', async () => {
     const scene = new Scene();
     const resources = new Map<
@@ -222,6 +255,7 @@ describe('body visual resources', () => {
     visual.assetBinding?.start();
     await visual.assetBinding?.whenSettled();
     expect(visual.assetBinding?.diagnostics()).toEqual({
+      clouds: { assetId: null, bound: false, state: 'procedural' },
       ring: { assetId: 'saturn-ring-opacity', bound: true, state: 'ready' },
       surface: { assetId: 'saturn-surface', bound: true, state: 'ready' },
     });
@@ -295,6 +329,107 @@ describe('body visual resources', () => {
     expect(ringResource.dispose).toHaveBeenCalledOnce();
     expect(surfaceMaterial.map).not.toBe(surfaceResource.texture);
     expect(ringMaterial?.alphaMap).not.toBe(ringResource.texture);
+    cache.dispose();
+  });
+
+  it('地球表面与云层共享缓存生命周期，并把云纹理同时绑定到云和云影', async () => {
+    const scene = new Scene();
+    const resources = new Map<
+      string,
+      LoadedTextureResource & { readonly dispose: ReturnType<typeof vi.fn<() => void>> }
+    >();
+    const loader = vi.fn<TextureAssetLoader>().mockImplementation((descriptor) => {
+      const resource = { dispose: vi.fn<() => void>(), texture: new Texture() };
+      resources.set(descriptor.id, resource);
+      return Promise.resolve(resource);
+    });
+    const cache = new TextureAssetCache(loader);
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        bodyId: 'earth',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        roughness: 0.82,
+        structureKey: 'rocky:v1:earth',
+        structureSeed: 42,
+        surfaceKind: 'rocky',
+        temperatureKelvin: 288,
+      }),
+      'webgpu',
+      false,
+      'high',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+      resolveBodyAssetPlan('earth'),
+      cache,
+    );
+
+    visual.assetBinding?.start();
+    await visual.assetBinding?.whenSettled();
+    const clouds = visual.environment?.clouds;
+    const cloudTexture = resources.get('earth-cloud-opacity')?.texture;
+    expect(visual.assetBinding?.diagnostics().clouds).toEqual({
+      assetId: 'earth-cloud-opacity',
+      bound: true,
+      state: 'ready',
+    });
+    expect(clouds?.cloudMesh.material.alphaMap).toBe(cloudTexture);
+    expect(clouds?.shadowMesh.material.alphaMap).toBe(cloudTexture);
+    expect(loader).toHaveBeenCalledTimes(2);
+
+    disposeBodyVisual(scene, visual);
+    expect(resources.get('earth-surface')?.dispose).toHaveBeenCalledOnce();
+    expect(resources.get('earth-cloud-opacity')?.dispose).toHaveBeenCalledOnce();
+    cache.dispose();
+  });
+
+  it('地球云资产失败时保留表面纹理和程序化云回退', async () => {
+    const scene = new Scene();
+    const surfaceResource = { dispose: vi.fn<() => void>(), texture: new Texture() };
+    const loader = vi.fn<TextureAssetLoader>().mockImplementation((descriptor) => {
+      return descriptor.role === 'cloud-opacity'
+        ? Promise.reject(new Error('cloud unavailable'))
+        : Promise.resolve(surfaceResource);
+    });
+    const cache = new TextureAssetCache(loader);
+    const visual = createBodyVisual(
+      scene,
+      appearance({
+        bodyId: 'earth',
+        emissiveColor: 0,
+        emissiveIntensity: 0,
+        light: null,
+        roughness: 0.82,
+        structureKey: 'rocky:v1:earth',
+        structureSeed: 42,
+        surfaceKind: 'rocky',
+        temperatureKelvin: 288,
+      }),
+      'webgl2',
+      false,
+      'high',
+      false,
+      STELLAR_LIGHT_REFERENCE_METERS_TO_SCENE_UNIT,
+      resolveBodyAssetPlan('earth'),
+      cache,
+    );
+    const fallback = visual.environment?.clouds?.fallbackAlphaMap;
+
+    visual.assetBinding?.start();
+    await visual.assetBinding?.whenSettled();
+    expect(visual.assetBinding?.diagnostics()).toEqual({
+      clouds: { assetId: 'earth-cloud-opacity', bound: false, state: 'fallback' },
+      ring: { assetId: null, bound: false, state: 'procedural' },
+      surface: { assetId: 'earth-surface', bound: true, state: 'ready' },
+    });
+    expect(visual.mesh.material.map).toBe(surfaceResource.texture);
+    expect(visual.environment?.clouds?.cloudMesh.material.alphaMap).toBe(fallback);
+    expect(visual.environment?.clouds?.shadowMesh.material.alphaMap).toBe(fallback);
+
+    disposeBodyVisual(scene, visual);
+    expect(surfaceResource.dispose).toHaveBeenCalledOnce();
     cache.dispose();
   });
 });

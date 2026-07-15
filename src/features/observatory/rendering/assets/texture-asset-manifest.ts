@@ -3,7 +3,7 @@ import { z } from 'zod';
 import manifestJson from './planetary-assets.json';
 
 const sha256Schema = z.string().regex(/^[A-F0-9]{64}$/);
-const textureAssetRoleSchema = z.enum(['surface-color', 'ring-opacity']);
+const textureAssetRoleSchema = z.enum(['surface-color', 'ring-opacity', 'cloud-opacity']);
 const textureAssetDescriptorSchema = z.object({
   bodyId: z.string().min(1),
   bytes: z.number().int().positive(),
@@ -27,6 +27,7 @@ const textureAssetManifestSchema = z
       url: z.url(),
     }),
     processing: z.object({
+      cloud: z.string().min(1),
       ring: z.string().min(1),
       surface: z.string().min(1),
       tool: z.string().min(1),

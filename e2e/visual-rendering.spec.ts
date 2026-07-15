@@ -26,9 +26,33 @@ interface VisualResourceDiagnostic {
   readonly state: 'procedural' | 'idle' | 'loading' | 'ready' | 'fallback';
 }
 
+interface AtmosphereResourceDiagnostic {
+  readonly id: string;
+  readonly layerCount: number;
+  readonly outerRadiusRatio: number;
+  readonly visible: boolean;
+}
+
+interface CloudResourceDiagnostic extends VisualResourceDiagnostic {
+  readonly phaseRadians: number;
+  readonly radiusRatio: number;
+  readonly shadowRadiusRatio: number;
+  readonly shadowVisible: boolean;
+  readonly visible: boolean;
+}
+
+interface ExposureStateDiagnostic {
+  readonly current: number;
+  readonly settled: boolean;
+  readonly target: number;
+}
+
 interface PlanetaryRingResourceDiagnostic extends VisualResourceDiagnostic {
   readonly innerRadiusRatio: number;
   readonly outerRadiusRatio: number;
+  readonly shadowLatitudeOffset: number;
+  readonly shadowOpacity: number;
+  readonly shadowVisible: boolean;
   readonly visible: boolean;
 }
 
@@ -211,6 +235,178 @@ async function expectEarthSurfacePixels(canvas: Locator): Promise<void> {
   ).toBeGreaterThan(8);
 }
 
+async function readEarthCloudResource(canvas: Locator): Promise<CloudResourceDiagnostic> {
+  const resources = await readJsonAttribute<CloudResourceDiagnostic[]>(
+    canvas,
+    'data-visual-cloud-resources',
+  );
+  const resource = resources.find((candidate) => candidate.id === 'earth');
+  if (resource === undefined) {
+    throw new Error('视觉诊断缺少 earth 云层资源');
+  }
+  return resource;
+}
+
+async function expectEarthEnvironmentResources(
+  canvas: Locator,
+  expectedCloudState: 'ready' | 'fallback' = 'ready',
+): Promise<void> {
+  await expect
+    .poll(async () => {
+      const resources = await readJsonAttribute<AtmosphereResourceDiagnostic[]>(
+        canvas,
+        'data-visual-atmosphere-resources',
+      );
+      return resources.find((resource) => resource.id === 'earth');
+    })
+    .toEqual({ id: 'earth', layerCount: 2, outerRadiusRatio: 1.026, visible: true });
+  await expect
+    .poll(async () => await readEarthCloudResource(canvas))
+    .toEqual({
+      assetId: 'earth-cloud-opacity',
+      bound: expectedCloudState === 'ready',
+      id: 'earth',
+      phaseRadians: expect.any(Number),
+      radiusRatio: 1.008,
+      shadowRadiusRatio: 1.0015,
+      shadowVisible: true,
+      state: expectedCloudState,
+      visible: true,
+    });
+}
+
+async function expectEarthAtmospherePixels(canvas: Locator): Promise<void> {
+  const projection = await readBodyProjection(canvas, 'earth');
+  const capture = await captureCanvas(canvas);
+  const centerX = projection.x * capture.scaleX;
+  const centerY = projection.y * capture.scaleY;
+  const radiusX = projection.radiusPixels * capture.scaleX;
+  const radiusY = projection.radiusPixels * capture.scaleY;
+  const atmosphereBlueBias: number[] = [];
+  const atmosphereLuminance: number[] = [];
+  const backgroundBlueBias: number[] = [];
+  const backgroundLuminance: number[] = [];
+  for (let y = Math.floor(centerY - radiusY * 1.14); y <= centerY + radiusY * 1.14; y += 1) {
+    for (let x = Math.floor(centerX - radiusX * 1.14); x <= centerX + radiusX * 1.14; x += 1) {
+      const normalizedRadius = Math.hypot((x - centerX) / radiusX, (y - centerY) / radiusY);
+      const pixel = readPixel(capture.image, x, y);
+      const blueBias = pixel.blue - (pixel.red + pixel.green) / 2;
+      if (normalizedRadius >= 1.002 && normalizedRadius <= 1.035) {
+        atmosphereBlueBias.push(blueBias);
+        atmosphereLuminance.push(pixelLuminance(pixel));
+      } else if (normalizedRadius >= 1.08 && normalizedRadius <= 1.14) {
+        backgroundBlueBias.push(blueBias);
+        backgroundLuminance.push(pixelLuminance(pixel));
+      }
+    }
+  }
+  expect(atmosphereBlueBias.length, 'earth 大气边缘采样不足').toBeGreaterThan(100);
+  expect(backgroundBlueBias.length, 'earth 大气背景采样不足').toBeGreaterThan(200);
+  expect(
+    percentile(atmosphereBlueBias, 0.75) - percentile(backgroundBlueBias, 0.75),
+    'earth 外缘缺少蓝色大气层',
+  ).toBeGreaterThan(1.5);
+  expect(
+    percentile(atmosphereLuminance, 0.75) - percentile(backgroundLuminance, 0.5),
+    'earth 大气边缘没有从空间背景中分离',
+  ).toBeGreaterThan(1);
+}
+
+function countChangedBodyInteriorSamples(
+  before: CanvasCapture,
+  beforeProjection: BodyProjectionDiagnostic,
+  after: CanvasCapture,
+  afterProjection: BodyProjectionDiagnostic,
+): { readonly changed: number; readonly total: number } {
+  let changed = 0;
+  let total = 0;
+  for (let normalizedY = -0.78; normalizedY <= 0.78; normalizedY += 0.025) {
+    for (let normalizedX = -0.78; normalizedX <= 0.78; normalizedX += 0.025) {
+      if (Math.hypot(normalizedX, normalizedY) > 0.78) {
+        continue;
+      }
+      const beforePixel = readPixel(
+        before.image,
+        (beforeProjection.x + normalizedX * beforeProjection.radiusPixels) * before.scaleX,
+        (beforeProjection.y + normalizedY * beforeProjection.radiusPixels) * before.scaleY,
+      );
+      const afterPixel = readPixel(
+        after.image,
+        (afterProjection.x + normalizedX * afterProjection.radiusPixels) * after.scaleX,
+        (afterProjection.y + normalizedY * afterProjection.radiusPixels) * after.scaleY,
+      );
+      const difference =
+        Math.abs(afterPixel.red - beforePixel.red) +
+        Math.abs(afterPixel.green - beforePixel.green) +
+        Math.abs(afterPixel.blue - beforePixel.blue);
+      if (difference >= 12) {
+        changed += 1;
+      }
+      total += 1;
+    }
+  }
+  return { changed, total };
+}
+
+async function expectPausedCloudsAdvanceAfterOneHour(
+  page: Page,
+  canvas: Locator,
+  expectedCloudState: 'ready' | 'fallback' = 'ready',
+): Promise<void> {
+  await page.getByRole('button', { name: '暂停模拟' }).click();
+  await expect(page.getByText('模拟已暂停')).toBeVisible();
+  await expectEarthEnvironmentResources(canvas, expectedCloudState);
+  const shell = page.locator('main.observatory-shell');
+  await expect
+    .poll(
+      async () => {
+        const first = Number(await shell.getAttribute('data-body-snapshot-time-seconds'));
+        await page.waitForTimeout(200);
+        const second = Number(await shell.getAttribute('data-body-snapshot-time-seconds'));
+        return second - first;
+      },
+      { timeout: 5_000 },
+    )
+    .toBe(0);
+  await page.waitForTimeout(150);
+  const beforePhase = (await readEarthCloudResource(canvas)).phaseRadians;
+  const beforeProjection = await readBodyProjection(canvas, 'earth');
+  const beforeCapture = await captureCanvas(canvas);
+  const beforeTime = Number(await shell.getAttribute('data-body-snapshot-time-seconds'));
+
+  await page.waitForTimeout(300);
+  expect((await readEarthCloudResource(canvas)).phaseRadians, '暂停后云相位仍在变化').toBe(
+    beforePhase,
+  );
+
+  await page.getByRole('button', { name: '单步推进一小时' }).click();
+  await expect
+    .poll(async () => Number(await shell.getAttribute('data-body-snapshot-time-seconds')))
+    .toBeGreaterThan(beforeTime + 3_599);
+  await expect
+    .poll(async () => (await readEarthCloudResource(canvas)).phaseRadians)
+    .not.toBe(beforePhase);
+
+  const afterPhase = (await readEarthCloudResource(canvas)).phaseRadians;
+  const phaseDelta = (afterPhase - beforePhase + Math.PI * 2) % (Math.PI * 2);
+  expect(phaseDelta, '单步一小时后的云相位增量错误').toBeCloseTo(Math.PI / 60, 4);
+  const afterProjection = await readBodyProjection(canvas, 'earth');
+  const afterCapture = await captureCanvas(canvas);
+  const difference = countChangedBodyInteriorSamples(
+    beforeCapture,
+    beforeProjection,
+    afterCapture,
+    afterProjection,
+  );
+  const changedFraction = difference.changed / difference.total;
+  expect(changedFraction, '云相位推进后球面像素没有变化').toBeGreaterThan(0.01);
+  expect(changedFraction, '云相位推进导致整颗地球画面失稳').toBeLessThan(0.55);
+}
+
+async function readExposureState(canvas: Locator): Promise<ExposureStateDiagnostic> {
+  return readJsonAttribute<ExposureStateDiagnostic>(canvas, 'data-visual-exposure-state');
+}
+
 function samplePatchLuminance(
   capture: CanvasCapture,
   cssX: number,
@@ -243,6 +439,9 @@ async function expectSaturnRingPixels(canvas: Locator): Promise<void> {
       id: 'saturn',
       innerRadiusRatio: 1.24,
       outerRadiusRatio: 2.27,
+      shadowLatitudeOffset: expect.any(Number),
+      shadowOpacity: expect.any(Number),
+      shadowVisible: true,
       state: 'ready',
       visible: true,
     });
@@ -424,7 +623,7 @@ async function expectVisualFoundation(page: Page, expectedBackend?: 'webgpu' | '
   await expectRenderedPixels(canvas);
 }
 
-test('桌面默认后端显示真实太阳、地球表面和土星环', async ({ page }) => {
+test('桌面默认后端显示真实太阳、地球环境和土星环影', async ({ page }) => {
   const browserDiagnostics = collectBrowserDiagnostics(page);
   await page.goto('/?markerDiagnostics=1&visualDiagnostics=1');
 
@@ -441,16 +640,19 @@ test('桌面默认后端显示真实太阳、地球表面和土星环', async ({
 
   await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
   await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+  await expectEarthEnvironmentResources(canvas);
   await expectEarthSurfacePixels(canvas);
+  await expectEarthAtmospherePixels(canvas);
+  await expectPausedCloudsAdvanceAfterOneHour(page, canvas);
 
   await page.getByRole('button', { name: '聚焦土星', exact: true }).click();
   await expectSurfaceResource(canvas, 'saturn', 'saturn-surface');
   await expectSaturnRingPixels(canvas);
 
-  expect(browserDiagnostics, 'M2 Task 2 桌面视觉流程存在 console warning/error').toEqual([]);
+  expect(browserDiagnostics, 'M2 Task 3 桌面视觉流程存在 console warning/error').toEqual([]);
 });
 
-test('手机 WebGL2 回退保留真实地球表面和土星环', async ({ page }) => {
+test('手机 WebGL2 回退保留真实地球环境和土星环影', async ({ page }) => {
   const browserDiagnostics = collectBrowserDiagnostics(page);
   await page.setViewportSize({ height: 844, width: 390 });
   await page.addInitScript(() => {
@@ -478,7 +680,9 @@ test('手机 WebGL2 回退保留真实地球表面和土星环', async ({ page }
     })
     .toBeGreaterThanOrEqual(1);
   await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+  await expectEarthEnvironmentResources(canvas);
   await expectEarthSurfacePixels(canvas);
+  await expectEarthAtmospherePixels(canvas);
 
   await page.getByRole('button', { name: '天体目录', exact: true }).click();
   await page.getByRole('button', { name: '聚焦土星', exact: true }).click();
@@ -490,7 +694,61 @@ test('手机 WebGL2 回退保留真实地球表面和土星环', async ({ page }
   expect(canvasBox?.width ?? 0).toBeGreaterThanOrEqual(390);
   expect(canvasBox?.height ?? 0).toBeGreaterThan(300);
 
-  expect(browserDiagnostics, 'M2 Task 2 手机 WebGL2 流程存在 console warning/error').toEqual([]);
+  expect(browserDiagnostics, 'M2 Task 3 手机 WebGL2 流程存在 console warning/error').toEqual([]);
+});
+
+test('太阳到地球近景的曝光连续平滑收敛', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.goto('/?visualDiagnostics=1');
+
+  await expectVisualFoundation(page);
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await page.getByRole('button', { name: '暂停模拟' }).click();
+  await expect(page.getByText('模拟已暂停')).toBeVisible();
+  await page.getByRole('button', { name: '聚焦太阳', exact: true }).click();
+  await expect
+    .poll(async () => (await readExposureState(canvas)).target, { timeout: 5_000 })
+    .toBe(0.68);
+  await expect
+    .poll(async () => (await readExposureState(canvas)).settled, { timeout: 5_000 })
+    .toBe(true);
+  const settledSunExposure = await readExposureState(canvas);
+  expect(settledSunExposure.target).toBe(0.68);
+  expect(settledSunExposure.current).toBeCloseTo(0.68, 2);
+  const startExposure = settledSunExposure.current;
+
+  await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
+  await expect
+    .poll(async () => (await readExposureState(canvas)).target, { timeout: 5_000 })
+    .toBeGreaterThan(startExposure + 0.25);
+  const samples: number[] = [];
+  for (let index = 0; index < 18; index += 1) {
+    await page.waitForTimeout(100);
+    samples.push((await readExposureState(canvas)).current);
+  }
+  await expect
+    .poll(async () => (await readExposureState(canvas)).settled, { timeout: 5_000 })
+    .toBe(true);
+  const finalExposure = await readExposureState(canvas);
+  samples.push(finalExposure.current);
+
+  expect(finalExposure.target - startExposure, '太阳到地球没有产生有效曝光跨度').toBeGreaterThan(
+    0.25,
+  );
+  expect(
+    new Set(samples.map((value) => value.toFixed(4))).size,
+    '曝光缺少连续中间值',
+  ).toBeGreaterThan(3);
+  for (let index = 1; index < samples.length; index += 1) {
+    expect(samples[index] ?? 0, '曝光切换过程中发生反向跳变').toBeGreaterThanOrEqual(
+      (samples[index - 1] ?? 0) - 0.002,
+    );
+    expect(samples[index] ?? 0, '曝光切换过程中越过目标值').toBeLessThanOrEqual(
+      finalExposure.target + 0.01,
+    );
+  }
+
+  expect(browserDiagnostics, '曝光适应流程存在 console warning/error').toEqual([]);
 });
 
 test('地球纹理失败时保留可选择和可聚焦的程序化回退', async ({ page }) => {
@@ -522,4 +780,26 @@ test('地球纹理失败时保留可选择和可聚焦的程序化回退', async
   await expectFallbackBodyPixels(canvas, 'earth');
 
   expect(browserDiagnostics, '纹理失败回退流程存在 console warning/error').toEqual([]);
+});
+
+test('地球云图失败时保留可移动的程序化云层', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.route('**/assets/planetary/earth-clouds.webp', async (route) => {
+    await route.fulfill({
+      body: 'not an image',
+      contentType: 'text/plain',
+      status: 200,
+    });
+  });
+  await page.goto('/?visualDiagnostics=1');
+
+  await expectVisualFoundation(page);
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await page.getByRole('button', { name: '聚焦地球', exact: true }).click();
+  await expectSurfaceResource(canvas, 'earth', 'earth-surface');
+  await expectEarthEnvironmentResources(canvas, 'fallback');
+  await expectEarthSurfacePixels(canvas);
+  await expectPausedCloudsAdvanceAfterOneHour(page, canvas, 'fallback');
+
+  expect(browserDiagnostics, '云图失败回退流程存在 console warning/error').toEqual([]);
 });

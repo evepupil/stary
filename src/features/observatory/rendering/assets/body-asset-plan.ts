@@ -7,7 +7,12 @@ export interface PlanetaryRingPlan {
   readonly opacityAsset: TextureAssetDescriptor;
 }
 
+export interface CloudLayerPlan {
+  readonly opacityAsset: TextureAssetDescriptor;
+}
+
 export interface BodyAssetPlan {
+  readonly clouds: CloudLayerPlan | null;
   readonly ring: PlanetaryRingPlan | null;
   readonly surface: TextureAssetDescriptor | null;
 }
@@ -28,6 +33,10 @@ const FIXED_SURFACE_ASSET_IDS: Readonly<Record<string, string>> = {
 export function resolveBodyAssetPlan(bodyId: string): BodyAssetPlan {
   const surfaceAssetId = FIXED_SURFACE_ASSET_IDS[bodyId];
   return {
+    clouds:
+      bodyId === 'earth'
+        ? { opacityAsset: getTextureAssetDescriptor('earth-cloud-opacity') }
+        : null,
     ring:
       bodyId === 'saturn'
         ? {

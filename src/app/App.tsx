@@ -124,6 +124,7 @@ export function App() {
         onCreationPlacementChange={creation.updatePlacement}
         onSelectBody={selectBody}
         selectedBodyId={effectiveSelectedBodyId}
+        simulationTimeSeconds={simulation.bodySnapshotSimulationTimeSeconds}
       />
 
       {viewMode === 'focus' ? (

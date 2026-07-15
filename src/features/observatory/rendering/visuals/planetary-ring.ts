@@ -3,12 +3,15 @@ import {
   ClampToEdgeWrapping,
   DataTexture,
   DoubleSide,
+  FrontSide,
   LinearFilter,
   Mesh,
+  MeshBasicMaterial,
   MeshStandardMaterial,
   NoColorSpace,
   RGBAFormat,
   RingGeometry,
+  SphereGeometry,
   UnsignedByteType,
 } from 'three';
 
@@ -21,6 +24,9 @@ export interface PlanetaryRingVisual {
   readonly innerRadiusRatio: number;
   readonly mesh: Mesh<RingGeometry, MeshStandardMaterial>;
   readonly outerRadiusRatio: number;
+  readonly shadowMap: DataTexture;
+  readonly shadowMesh: Mesh<SphereGeometry, MeshBasicMaterial>;
+  shadowLatitudeOffset: number;
 }
 
 export function createPlanetaryRingVisual(
@@ -51,6 +57,27 @@ export function createPlanetaryRingVisual(
   mesh.renderOrder = 2;
   mesh.rotation.x = (plan.axialTiltDegrees * Math.PI) / 180;
   mesh.userData.planetaryRing = true;
+  const shadowMap = createRingShadowMap();
+  const shadowMaterial = new MeshBasicMaterial({
+    alphaMap: shadowMap,
+    alphaTest: 0.02,
+    color: 0x111418,
+    depthTest: true,
+    depthWrite: false,
+    opacity: 0,
+    polygonOffset: true,
+    polygonOffsetFactor: -1,
+    side: FrontSide,
+    transparent: true,
+  });
+  const shadowMesh = new Mesh(
+    new SphereGeometry(1, backend === 'webgpu' ? 72 : 48, backend === 'webgpu' ? 48 : 32),
+    shadowMaterial,
+  );
+  shadowMesh.name = 'saturn-ring-shadow';
+  shadowMesh.renderOrder = 3.2;
+  shadowMesh.rotation.x = mesh.rotation.x;
+  shadowMesh.visible = false;
 
   return {
     axialTiltDegrees: plan.axialTiltDegrees,
@@ -58,7 +85,44 @@ export function createPlanetaryRingVisual(
     innerRadiusRatio: plan.innerRadiusRatio,
     mesh,
     outerRadiusRatio: plan.outerRadiusRatio,
+    shadowMap,
+    shadowLatitudeOffset: 0,
+    shadowMesh,
   };
+}
+
+export function updatePlanetaryRingShadow(
+  visual: PlanetaryRingVisual,
+  lightDirection: { readonly x: number; readonly y: number; readonly z: number } | null,
+): void {
+  if (lightDirection === null) {
+    visual.shadowLatitudeOffset = 0;
+    visual.shadowMap.offset.y = 0;
+    visual.shadowMesh.material.opacity = 0;
+    visual.shadowMesh.visible = false;
+    return;
+  }
+  const length = Math.hypot(lightDirection.x, lightDirection.y, lightDirection.z);
+  if (!Number.isFinite(length) || length <= 0) {
+    throw new RangeError('行星环光照方向必须是非零有限向量');
+  }
+  const tilt = (visual.axialTiltDegrees * Math.PI) / 180;
+  const normal = { x: 0, y: -Math.sin(tilt), z: Math.cos(tilt) };
+  const incidence = Math.abs(
+    (normal.x * lightDirection.x + normal.y * lightDirection.y + normal.z * lightDirection.z) /
+      length,
+  );
+  const signedIncidence =
+    (normal.x * lightDirection.x + normal.y * lightDirection.y + normal.z * lightDirection.z) /
+    length;
+  const maximumShadowIncidence = Math.min(1, 1 / visual.innerRadiusRatio);
+  const normalizedShadowIncidence = Math.min(1, incidence / maximumShadowIncidence);
+  const shadowStrength =
+    incidence >= maximumShadowIncidence ? 0 : Math.sin(normalizedShadowIncidence * Math.PI);
+  visual.shadowLatitudeOffset = signedIncidence * 0.075;
+  visual.shadowMap.offset.y = visual.shadowLatitudeOffset;
+  visual.shadowMesh.material.opacity = shadowStrength * 0.32;
+  visual.shadowMesh.visible = shadowStrength > 0.02;
 }
 
 export function applyRadialRingUvs(
@@ -90,6 +154,9 @@ export function disposePlanetaryRingVisual(visual: PlanetaryRingVisual): void {
   visual.mesh.geometry.dispose();
   visual.mesh.material.dispose();
   visual.fallbackAlphaMap.dispose();
+  visual.shadowMesh.geometry.dispose();
+  visual.shadowMesh.material.dispose();
+  visual.shadowMap.dispose();
 }
 
 function createFallbackRingAlphaMap(): DataTexture {
@@ -113,6 +180,34 @@ function createFallbackRingAlphaMap(): DataTexture {
   }
   const texture = new DataTexture(data, width, height, RGBAFormat, UnsignedByteType);
   texture.name = 'saturn-ring-procedural-fallback';
+  texture.colorSpace = NoColorSpace;
+  texture.wrapS = ClampToEdgeWrapping;
+  texture.wrapT = ClampToEdgeWrapping;
+  texture.magFilter = LinearFilter;
+  texture.minFilter = LinearFilter;
+  texture.needsUpdate = true;
+  return texture;
+}
+
+function createRingShadowMap(): DataTexture {
+  const width = 256;
+  const height = 128;
+  const data = new Uint8Array(width * height * 4);
+  for (let y = 0; y < height; y += 1) {
+    const latitude = Math.abs(y / (height - 1) - 0.5);
+    const core = Math.exp(-((latitude / 0.034) ** 2));
+    const division = Math.exp(-(((latitude - 0.018) / 0.0045) ** 2));
+    const alpha = Math.round(255 * Math.max(0, core - division * 0.42));
+    for (let x = 0; x < width; x += 1) {
+      const offset = (y * width + x) * 4;
+      data[offset] = alpha;
+      data[offset + 1] = alpha;
+      data[offset + 2] = alpha;
+      data[offset + 3] = 255;
+    }
+  }
+  const texture = new DataTexture(data, width, height, RGBAFormat, UnsignedByteType);
+  texture.name = 'saturn-ring-shadow-opacity';
   texture.colorSpace = NoColorSpace;
   texture.wrapS = ClampToEdgeWrapping;
   texture.wrapT = ClampToEdgeWrapping;
