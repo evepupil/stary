@@ -186,6 +186,94 @@ test('手机编辑面板保留画布、支持滚动并隐藏时间控制', async
   expect(browserDiagnostics, '手机编辑流程存在 console warning/error').toEqual([]);
 });
 
+test('WebGL2 编辑冲突会保留字段，重同步后可成功提交', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, 'gpu', {
+      configurable: true,
+      value: undefined,
+    });
+
+    const NativeWorker = window.Worker;
+    let injectRevisionConflict = true;
+    const TrackingWorker = new Proxy(NativeWorker, {
+      construct(target, argumentsList) {
+        const worker = Reflect.construct(target, argumentsList, target) as Worker;
+        const workerUrl: unknown = argumentsList[0];
+        if (String(workerUrl).includes('physics.worker')) {
+          const postMessage = worker.postMessage.bind(worker);
+          worker.postMessage = (message: unknown): void => {
+            let submittedMessage = message;
+            if (
+              injectRevisionConflict &&
+              typeof message === 'object' &&
+              message !== null &&
+              (message as { readonly type?: unknown }).type === 'replaceBodies'
+            ) {
+              const expectedBodyRevision = (message as { readonly expectedBodyRevision?: unknown })
+                .expectedBodyRevision;
+              if (typeof expectedBodyRevision === 'number') {
+                injectRevisionConflict = false;
+                submittedMessage = { ...message, expectedBodyRevision: expectedBodyRevision + 1 };
+              }
+            }
+            postMessage(submittedMessage);
+          };
+        }
+        return worker;
+      },
+    });
+    Object.defineProperty(window, 'Worker', {
+      configurable: true,
+      value: TrackingWorker,
+      writable: true,
+    });
+  });
+  await page.goto('/?markerDiagnostics=1');
+  const observatory = page.locator('main.observatory-shell');
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  const radiusInput = page.locator('#body-edit-radius');
+  const confirmButton = page.getByRole('button', { name: '确认修改', exact: true });
+
+  await expect(page.getByText('模拟运行中')).toBeVisible({ timeout: 30_000 });
+  await expect(canvas).toHaveAttribute('data-renderer-backend', 'webgl2');
+  await page.getByRole('button', { name: '编辑参数', exact: true }).click();
+  await expect(page.getByText('模拟已暂停')).toBeVisible();
+  const frozenTime = await expectSynchronizedEditingSnapshot(observatory, 'edit');
+  await expect(radiusInput).toBeVisible({ timeout: 30_000 });
+  await radiusInput.fill('6600');
+  await expect(observatory).toHaveAttribute('data-editing-phase', 'ready', { timeout: 30_000 });
+  await expect(confirmButton).toBeEnabled();
+  await confirmButton.click();
+
+  await expect(observatory).toHaveAttribute('data-editing-phase', 'conflicted');
+  await expect(observatory).toHaveAttribute('data-body-revision', '0');
+  await expect(observatory).toHaveAttribute('data-simulation-time-seconds', frozenTime);
+  await expect(radiusInput).toHaveValue('6600');
+  await expect(radiusInput).toBeDisabled();
+  await expect(confirmButton).toBeDisabled();
+  await expect(page.getByText('正式状态已经变化', { exact: true })).toBeVisible();
+
+  await page.getByRole('button', { name: '重新同步', exact: true }).click();
+  await expect(radiusInput).toHaveValue('6600');
+  await expect(observatory).toHaveAttribute('data-editing-phase', 'ready', { timeout: 30_000 });
+  const candidateRevision = await observatory.getAttribute('data-editing-candidate-revision');
+  const acceptedPreviewRevision = await observatory.getAttribute(
+    'data-editing-accepted-preview-revision',
+  );
+  expect(acceptedPreviewRevision).not.toBe('none');
+  expect(acceptedPreviewRevision).toBe(candidateRevision);
+  await expect(confirmButton).toBeEnabled();
+  await confirmButton.click();
+
+  await expect(observatory).toHaveAttribute('data-editing-active', 'false');
+  await expect(observatory).toHaveAttribute('data-body-revision', '1');
+  await expect(observatory).toHaveAttribute('data-simulation-time-seconds', frozenTime);
+  await expect(canvas).toHaveAttribute('data-renderer-backend', 'webgl2');
+  await expect(page.getByText('6,600 km', { exact: true })).toBeVisible();
+  expect(browserDiagnostics, 'WebGL2 编辑冲突恢复流程存在 console warning/error').toEqual([]);
+});
+
 test('WebGPU 不可用时可在 WebGL2 中删除天体', async ({ page }) => {
   const browserDiagnostics = collectBrowserDiagnostics(page);
   await page.addInitScript(() => {

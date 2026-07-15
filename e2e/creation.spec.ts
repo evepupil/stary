@@ -5,6 +5,11 @@ interface CameraState {
   readonly target: { readonly x: number; readonly y: number; readonly z: number };
 }
 
+interface PreviewWorkerStats {
+  readonly created: number;
+  readonly terminated: number;
+}
+
 function isFiniteVector(candidate: unknown): boolean {
   if (typeof candidate !== 'object' || candidate === null) {
     return false;
@@ -60,11 +65,7 @@ async function expectSynchronizedCreationSnapshot(observatory: Locator): Promise
     .toBe(true);
 }
 
-async function placeDraft(
-  page: Page,
-  expectedBodyCount: number,
-  expectedTrackCount = expectedBodyCount,
-): Promise<void> {
+async function placeDraftGesture(page: Page, expectedBodyCount: number): Promise<void> {
   const canvas = page.locator('canvas[data-renderer-backend]');
   const bounds = await canvas.boundingBox();
   expect(bounds).not.toBeNull();
@@ -86,6 +87,15 @@ async function placeDraft(
     String(expectedBodyCount),
   );
   await expect(canvas).toHaveAttribute('data-creation-velocity-arrow-visible', 'true');
+}
+
+async function placeDraft(
+  page: Page,
+  expectedBodyCount: number,
+  expectedTrackCount = expectedBodyCount,
+): Promise<void> {
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await placeDraftGesture(page, expectedBodyCount);
   await expect
     .poll(async () => await canvas.getAttribute('data-creation-preview-risk'), {
       timeout: 30_000,
@@ -109,6 +119,20 @@ async function placeDraft(
 
 async function placeRockyPlanet(page: Page): Promise<void> {
   await placeDraft(page, 1);
+}
+
+async function readPreviewWorkerStats(page: Page): Promise<PreviewWorkerStats> {
+  return page.evaluate(() => {
+    const stats = (
+      window as typeof window & {
+        readonly __staryPreviewWorkerStats?: PreviewWorkerStats;
+      }
+    ).__staryPreviewWorkerStats;
+    if (stats === undefined) {
+      throw new Error('页面缺少预览 Worker 生命周期统计');
+    }
+    return { ...stats };
+  });
 }
 
 test('创建草稿在确认前隔离，取消恢复运行，确认后原子加入正式模拟', async ({ page }) => {
@@ -153,6 +177,94 @@ test('创建草稿在确认前隔离，取消恢复运行，确认后原子加�
   await expect(canvas).toHaveAttribute('data-creation-active', 'false');
 
   expect(browserDiagnostics, '创建流程存在 console warning/error').toEqual([]);
+});
+
+test('待决预览不阻塞画面，取消会终止 Worker 并清空草稿资源', async ({ page }) => {
+  const browserDiagnostics = collectBrowserDiagnostics(page);
+  await page.addInitScript(() => {
+    const NativeWorker = window.Worker;
+    const stats = { created: 0, terminated: 0 };
+    Object.defineProperty(window, '__staryPreviewWorkerStats', {
+      configurable: true,
+      value: stats,
+    });
+
+    const TrackingWorker = new Proxy(NativeWorker, {
+      construct(target, argumentsList) {
+        const worker = Reflect.construct(target, argumentsList, target) as Worker;
+        const workerUrl: unknown = argumentsList[0];
+        if (String(workerUrl).includes('orbit-preview.worker')) {
+          const terminate = worker.terminate.bind(worker);
+          stats.created += 1;
+          worker.terminate = (): void => {
+            stats.terminated += 1;
+            terminate();
+          };
+        }
+        return worker;
+      },
+    });
+    Object.defineProperty(window, 'Worker', {
+      configurable: true,
+      value: TrackingWorker,
+      writable: true,
+    });
+  });
+  await page.route('**/orbit-preview.worker-*.js', async (route) => {
+    await new Promise((resolve) => setTimeout(resolve, 1_500));
+    await route.continue().catch(() => undefined);
+  });
+
+  await page.goto('/?markerDiagnostics=1');
+  const observatory = page.locator('main.observatory-shell');
+  const directory = page.locator('aside[aria-label="天体目录"]');
+  const canvas = page.locator('canvas[data-renderer-backend]');
+  await expect(page.getByText('模拟运行中')).toBeVisible({ timeout: 30_000 });
+  await expect(directory.locator('[role="listitem"]')).toHaveCount(10);
+
+  await page.getByRole('button', { name: '创造', exact: true }).click();
+  await expectSynchronizedCreationSnapshot(observatory);
+  await placeDraftGesture(page, 1);
+  await expect(observatory).toHaveAttribute('data-creation-phase', 'previewing');
+  await expect.poll(async () => (await readPreviewWorkerStats(page)).created).toBe(1);
+
+  const rafFrames = await page.evaluate(
+    () =>
+      new Promise<number>((resolve) => {
+        let frameCount = 0;
+        const startedAt = performance.now();
+        const sampleFrame = (timestamp: number) => {
+          frameCount += 1;
+          if (timestamp - startedAt >= 250) {
+            resolve(frameCount);
+            return;
+          }
+          requestAnimationFrame(sampleFrame);
+        };
+        requestAnimationFrame(sampleFrame);
+      }),
+  );
+  expect(rafFrames).toBeGreaterThan(5);
+
+  await page.getByRole('button', { name: '取消', exact: true }).click();
+  await expect(observatory).toHaveAttribute('data-mode', 'observe');
+  await expect(page.getByText('模拟运行中')).toBeVisible();
+  await expect(observatory).toHaveAttribute('data-body-revision', '0');
+  await expect(directory.locator('[role="listitem"]')).toHaveCount(10);
+  await expect(canvas).toHaveAttribute('data-creation-active', 'false');
+  await expect(canvas).toHaveAttribute('data-draft-preview-active', 'false');
+  await expect(canvas).not.toHaveAttribute('data-creation-body-visual-count');
+  await expect(canvas).not.toHaveAttribute('data-creation-trajectory-visual-count');
+  await expect(canvas).not.toHaveAttribute('data-creation-velocity-arrow-visible');
+  await expect.poll(async () => (await readPreviewWorkerStats(page)).terminated).toBe(1);
+
+  await page.waitForTimeout(1_700);
+  await expect(observatory).toHaveAttribute('data-mode', 'observe');
+  await expect(observatory).toHaveAttribute('data-body-revision', '0');
+  await expect(directory.locator('[role="listitem"]')).toHaveCount(10);
+  await expect(canvas).not.toHaveAttribute('data-creation-preview-risk');
+  await expect(canvas).not.toHaveAttribute('data-creation-preview-track-count');
+  expect(browserDiagnostics, '取消待决预览后存在 console warning/error').toEqual([]);
 });
 
 test('手机视口保留上半屏画布并完成创建确认', async ({ page }) => {
