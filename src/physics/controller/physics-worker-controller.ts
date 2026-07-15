@@ -16,6 +16,17 @@ type WorkerResponseOfType<Type extends WorkerToMainMessage['type']> = Extract<
   WorkerToMainMessage,
   { type: Type }
 >;
+type WorkerErrorMessage = Extract<WorkerToMainMessage, { type: 'error' }>;
+
+export class PhysicsWorkerCommandError extends Error {
+  readonly code: WorkerErrorMessage['code'];
+
+  constructor(message: WorkerErrorMessage) {
+    super(`${message.code}: ${message.message}`);
+    this.name = 'PhysicsWorkerCommandError';
+    this.code = message.code;
+  }
+}
 
 export interface PhysicsWorkerTarget {
   addEventListener(type: WorkerControllerEventType, listener: EventListener): void;
@@ -314,7 +325,7 @@ export class PhysicsWorkerController {
         listener(message);
       });
       if (message.type === 'error') {
-        const error = new Error(`${message.code}: ${message.message}`);
+        const error = new PhysicsWorkerCommandError(message);
         if (message.recoverable) {
           if (message.requestSequence === null) {
             return;

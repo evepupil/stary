@@ -1,3 +1,5 @@
+import { Pencil, Trash2 } from 'lucide-react';
+
 import type { BodyState, PhysicsDiagnostics } from '../../../physics/protocol/schemas';
 import { celestialColorToCss, getCelestialCatalogEntry } from '../catalog';
 import { findOrbitParent } from '../rendering/orbit-parent';
@@ -14,6 +16,9 @@ interface BodyInspectorProps {
   readonly body: BodyState | null;
   readonly bodies: readonly BodyState[];
   readonly diagnostics: PhysicsDiagnostics | null;
+  readonly actionsDisabled?: boolean;
+  readonly onDeleteBody?: (bodyId: string) => void;
+  readonly onEditBody?: (bodyId: string) => void;
 }
 
 function vectorMagnitude(vector: { readonly x: number; readonly y: number; readonly z: number }) {
@@ -25,6 +30,9 @@ export function BodyInspector({
   body,
   bodies,
   diagnostics,
+  actionsDisabled = false,
+  onDeleteBody,
+  onEditBody,
 }: BodyInspectorProps) {
   if (body === null) {
     return (
@@ -94,6 +102,36 @@ export function BodyInspector({
           <small>{`相对漂移 ${diagnosticViewModel?.totalAngularMomentum.driftLabel ?? '--'}`}</small>
         </div>
       </div>
+      {onEditBody !== undefined || onDeleteBody !== undefined ? (
+        <div className="inspector-actions">
+          {onEditBody !== undefined ? (
+            <button
+              disabled={actionsDisabled}
+              onClick={() => {
+                onEditBody(body.id);
+              }}
+              type="button"
+            >
+              <Pencil aria-hidden="true" size={14} />
+              <span>编辑参数</span>
+            </button>
+          ) : null}
+          {onDeleteBody !== undefined ? (
+            <button
+              className="danger-button"
+              data-body-action="delete"
+              disabled={actionsDisabled}
+              onClick={() => {
+                onDeleteBody(body.id);
+              }}
+              type="button"
+            >
+              <Trash2 aria-hidden="true" size={14} />
+              <span>删除天体</span>
+            </button>
+          ) : null}
+        </div>
+      ) : null}
     </div>
   );
 }

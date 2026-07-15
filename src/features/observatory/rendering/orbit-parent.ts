@@ -8,7 +8,10 @@ export function findOrbitParent(body: BodyState, bodies: readonly BodyState[]): 
     if (catalogEntry.orbitParentId === null) {
       return null;
     }
-    return bodies.find((candidate) => candidate.id === catalogEntry.orbitParentId) ?? null;
+    const declaredParent = bodies.find((candidate) => candidate.id === catalogEntry.orbitParentId);
+    if (declaredParent !== undefined) {
+      return declaredParent;
+    }
   }
 
   return findDominantReferenceBody(

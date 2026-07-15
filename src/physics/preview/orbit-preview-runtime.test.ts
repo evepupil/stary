@@ -93,6 +93,22 @@ describe('OrbitPreviewRuntime', () => {
     expect(harness.closeWorker).toHaveBeenCalledOnce();
   });
 
+  it('完整处理没有参考天体的单草稿预览', async () => {
+    const harness = createHarness();
+
+    await harness.runtime.receive({ ...request, referenceBodyId: null });
+
+    expect(harness.messages).toHaveLength(1);
+    expect(harness.messages[0]).toMatchObject({
+      type: 'trajectoryPreviewResult',
+      requestId: 'request-1',
+      draftRevision: 1,
+      risk: { kind: 'stable' },
+    });
+    expect(harness.simulation.destroyCount).toBe(1);
+    expect(harness.closeWorker).toHaveBeenCalledOnce();
+  });
+
   it('非法请求返回无关联错误并关闭 Worker', async () => {
     const harness = createHarness();
 

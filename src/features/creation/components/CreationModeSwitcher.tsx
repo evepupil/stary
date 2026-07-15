@@ -3,15 +3,21 @@ import { Eye, FlaskConical, Plus } from 'lucide-react';
 export type ObservatoryMode = 'observe' | 'create';
 
 interface CreationModeSwitcherProps {
+  readonly disabled?: boolean;
   readonly mode: ObservatoryMode;
   readonly onModeChange: (mode: ObservatoryMode) => void;
 }
 
-export function CreationModeSwitcher({ mode, onModeChange }: CreationModeSwitcherProps) {
+export function CreationModeSwitcher({
+  disabled = false,
+  mode,
+  onModeChange,
+}: CreationModeSwitcherProps) {
   return (
     <nav aria-label="模拟模式" className="mode-switcher">
       <button
         aria-pressed={mode === 'observe'}
+        disabled={disabled}
         onClick={() => {
           onModeChange('observe');
         }}
@@ -22,6 +28,7 @@ export function CreationModeSwitcher({ mode, onModeChange }: CreationModeSwitche
       </button>
       <button
         aria-pressed={mode === 'create'}
+        disabled={disabled}
         onClick={() => {
           onModeChange('create');
         }}

@@ -39,6 +39,12 @@ describe('trajectory preview protocol', () => {
     expect(trajectoryPreviewRequestSchema.parse(request)).toEqual(request);
   });
 
+  it('接受没有参考天体的预览请求', () => {
+    const input = { ...request, referenceBodyId: null };
+
+    expect(trajectoryPreviewRequestSchema.parse(input)).toEqual(input);
+  });
+
   it.each([
     { ...request, extra: true },
     { ...request, draftBodyIds: ['draft', 'draft'] },
@@ -74,6 +80,9 @@ describe('trajectory preview protocol', () => {
     } as const;
 
     expect(trajectoryPreviewResponseSchema.parse(baseResult)).toEqual(baseResult);
+    expect(
+      trajectoryPreviewResponseSchema.parse({ ...baseResult, closestApproachMeters: null }),
+    ).toMatchObject({ closestApproachMeters: null });
     expect(() =>
       trajectoryPreviewResponseSchema.parse({
         ...baseResult,

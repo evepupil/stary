@@ -77,6 +77,10 @@ const MARKER_DIAGNOSTICS_QUERY_PARAMETER = 'markerDiagnostics';
 const MARKER_DIAGNOSTICS_INTERVAL_MILLISECONDS = 100;
 const CREATION_VELOCITY_DRAG_SECONDS = 10_000_000;
 
+function usesCreationCamera(state: CreationOverlayState | null): boolean {
+  return state?.enabled === true && state.cameraMode === 'creation';
+}
+
 interface BodyVisual {
   readonly bodyId: string;
   readonly isPrimary: boolean;
@@ -255,7 +259,7 @@ export class ObservatoryScene {
     this.updateOrbits(bodies);
     this.updateCreationOverlay();
 
-    if (this.creationState?.enabled !== true && this.viewMode === 'focus') {
+    if (!usesCreationCamera(this.creationState) && this.viewMode === 'focus') {
       this.followFocusedBody();
     }
   }
@@ -270,7 +274,7 @@ export class ObservatoryScene {
     const frame = computeFocusCameraFrame(body, parent, this.metersToSceneUnit, this.camera.aspect);
     this.focusBodyId = bodyId;
     this.viewMode = 'focus';
-    if (this.creationState?.enabled === true) {
+    if (usesCreationCamera(this.creationState)) {
       return true;
     }
     this.cameraWasInteracted = false;
@@ -281,7 +285,7 @@ export class ObservatoryScene {
   showOverview(): void {
     this.focusBodyId = null;
     this.viewMode = 'overview';
-    if (this.creationState?.enabled === true) {
+    if (usesCreationCamera(this.creationState)) {
       return;
     }
     this.cameraWasInteracted = false;
@@ -292,22 +296,27 @@ export class ObservatoryScene {
     if (this.disposed) {
       return;
     }
-    const wasEnabled = this.creationState?.enabled === true;
-    const nextEnabled = state?.enabled === true;
-    if (!wasEnabled && nextEnabled) {
+    const wasUsingCreationCamera = usesCreationCamera(this.creationState);
+    const nextUsesCreationCamera = usesCreationCamera(state);
+    if (!wasUsingCreationCamera && nextUsesCreationCamera) {
       this.enterCreationCameraView();
-    } else if (wasEnabled && !nextEnabled) {
+    } else if (wasUsingCreationCamera && !nextUsesCreationCamera) {
       this.cancelCreationDrag();
       this.leaveCreationCameraView();
     }
     this.creationState = state;
     if (this.controls !== null) {
-      this.controls.enabled = !nextEnabled;
+      this.controls.enabled = !nextUsesCreationCamera;
     }
     const canvas = this.renderer.domElement;
-    canvas.dataset.creationActive = state?.enabled === true ? 'true' : 'false';
+    canvas.dataset.creationActive = nextUsesCreationCamera ? 'true' : 'false';
+    canvas.dataset.draftPreviewActive = state?.enabled === true ? 'true' : 'false';
     if (state?.enabled === true) {
-      canvas.dataset.creationStage = state.placement?.phase ?? 'placing';
+      if (nextUsesCreationCamera) {
+        canvas.dataset.creationStage = state.placement?.phase ?? 'placing';
+      } else {
+        delete canvas.dataset.creationStage;
+      }
       canvas.dataset.creationPreviewRisk = state.preview?.risk.kind ?? 'none';
       canvas.dataset.creationPreviewTrackCount = String(state.preview?.tracks.length ?? 0);
     } else {
@@ -489,7 +498,7 @@ export class ObservatoryScene {
     const width = Math.max(1, this.mount.clientWidth);
     const height = Math.max(1, this.mount.clientHeight);
     this.camera.aspect = width / height;
-    if (this.creationState?.enabled === true && this.controls !== null) {
+    if (usesCreationCamera(this.creationState) && this.controls !== null) {
       applyCreationCameraView(this.camera, this.controls);
     } else if (!this.cameraWasInteracted) {
       const focusFrame = this.computeCurrentFocusFrame();
@@ -510,7 +519,7 @@ export class ObservatoryScene {
     }
 
     try {
-      if (this.creationState?.enabled !== true) {
+      if (!usesCreationCamera(this.creationState)) {
         this.controls?.update();
       }
       for (const visual of this.bodyVisuals.values()) {

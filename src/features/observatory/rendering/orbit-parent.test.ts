@@ -3,12 +3,12 @@ import { describe, expect, it } from 'vitest';
 import type { BodyState } from '../../../physics/protocol/schemas';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
 
-function createBody(id: string, massKg: number): BodyState {
+function createBody(id: string, massKg: number, x = 0): BodyState {
   return {
     id,
     massKg,
     radiusMeters: 1,
-    positionMeters: { x: 0, y: 0, z: 0 },
+    positionMeters: { x, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
   };
 }
@@ -27,11 +27,26 @@ describe('orbit parent', () => {
     expect(findOrbitParent(moon, bodies)).toBe(earth);
   });
 
+  it('删除地球后月球按引力优势回退到太阳', () => {
+    expect(findOrbitParent(moon, [sun, moon])).toBe(sun);
+  });
+
+  it('删除太阳后行星按当前位置重新选择主导父体', () => {
+    const movedEarth = createBody('earth', 6e24, 1_000_000);
+    const nearbyPlanet = createBody('custom-nearby-planet', 1e25, 1_001_000);
+    const distantGiant = createBody('custom-distant-giant', 1e28, 1e12);
+
+    expect(findOrbitParent(movedEarth, [movedEarth, nearbyPlanet, distantGiant])).toBe(
+      nearbyPlanet,
+    );
+  });
+
   it('主星没有轨道父级，未知天体回退到最大质量天体', () => {
     const comet = createBody('custom-comet', 1e12);
     const extendedBodies = [...bodies, comet];
 
     expect(findOrbitParent(sun, extendedBodies)).toBeNull();
+    expect(findOrbitParent(sun, [earth, moon])).toBeNull();
     expect(findOrbitParent(comet, extendedBodies)).toBe(sun);
     expect(findMostMassiveBody(extendedBodies)).toBe(sun);
   });

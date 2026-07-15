@@ -1,10 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 
-import {
-  ORBIT_PREVIEW_PROTOCOL_VERSION,
-  requestTrajectoryPreview,
-  type TrajectoryPreviewResult,
-} from '../../physics/preview';
+import { ORBIT_PREVIEW_PROTOCOL_VERSION, requestTrajectoryPreview } from '../../physics/preview';
 import type { UniverseSimulation } from '../observatory/simulation/use-universe-simulation';
 import type { CreationPhase } from './components/CreationPanel';
 import type { ObservatoryMode } from './components/CreationModeSwitcher';
@@ -15,6 +11,7 @@ import {
   getCreationPreset,
 } from './model/body-presets';
 import { captureCreationSnapshot } from './model/creation-draft';
+import { toCreationPreview } from './model/creation-preview';
 import type {
   CreationDraft,
   CreationOverlayState,
@@ -49,27 +46,6 @@ export interface BodyCreationController {
 
 function toError(error: unknown): Error {
   return error instanceof Error ? error : new Error('创造工具发生未知错误');
-}
-
-function toCreationPreview(result: TrajectoryPreviewResult): CreationPreview {
-  const risk =
-    result.risk.kind === 'stable'
-      ? ({ kind: 'stable' } as const)
-      : result.risk.kind === 'escape'
-        ? ({ kind: 'escape', bodyId: result.risk.bodyId } as const)
-        : ({
-            kind: 'collision',
-            bodyId: result.risk.bodyId,
-            otherBodyId: result.risk.otherBodyId,
-            timeSeconds: result.risk.timeSeconds,
-          } as const);
-
-  return {
-    closestApproachMeters: result.closestApproachMeters,
-    durationSeconds: result.durationSeconds,
-    risk,
-    tracks: result.tracks,
-  };
 }
 
 export function useBodyCreation({
@@ -293,6 +269,7 @@ export function useBodyCreation({
     }
     return {
       enabled: true,
+      cameraMode: 'creation',
       interactive: snapshot !== null && phase !== 'submitting',
       draftBodies: draft?.bodies ?? [],
       placement,

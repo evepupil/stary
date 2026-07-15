@@ -40,7 +40,7 @@ export const trajectoryPreviewRequestSchema = z
     draftRevision: safeNonNegativeIntegerSchema,
     bodies: bodyStatesSchema,
     draftBodyIds: z.array(identifierSchema).min(1).max(512),
-    referenceBodyId: identifierSchema,
+    referenceBodyId: identifierSchema.nullable(),
     durationSeconds: positiveFiniteNumberSchema.max(MAX_TRAJECTORY_PREVIEW_DURATION_SECONDS),
     sampleCount: z
       .number()
@@ -69,6 +69,10 @@ export const trajectoryPreviewRequestSchema = z
       }
       draftBodyIds.add(bodyId);
     });
+
+    if (request.referenceBodyId === null) {
+      return;
+    }
 
     if (!bodyIds.has(request.referenceBodyId)) {
       context.addIssue({
@@ -120,7 +124,7 @@ export const trajectoryPreviewResultSchema = z.strictObject({
   durationSeconds: positiveFiniteNumberSchema.max(MAX_TRAJECTORY_PREVIEW_DURATION_SECONDS),
   tracks: z.array(previewTrackSchema).min(1).max(512),
   risk: trajectoryPreviewRiskSchema,
-  closestApproachMeters: nonNegativeFiniteNumberSchema,
+  closestApproachMeters: nonNegativeFiniteNumberSchema.nullable(),
 });
 
 export const trajectoryPreviewErrorSchema = z.strictObject({

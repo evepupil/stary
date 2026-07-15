@@ -78,6 +78,7 @@ function validateRisk(result: TrajectoryPreviewResult, request: TrajectoryPrevie
 
   if (risk.kind === 'escape') {
     if (
+      request.referenceBodyId === null ||
       risk.otherBodyId !== request.referenceBodyId ||
       risk.timeSeconds !== request.durationSeconds
     ) {

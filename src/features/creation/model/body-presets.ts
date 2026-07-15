@@ -248,9 +248,21 @@ export function estimatePreviewDurationSeconds(
   snapshotBodies: readonly BodyState[],
   draft: CreationDraft,
 ): number {
-  const referenceBody = snapshotBodies.find((body) => body.id === draft.referenceBodyId);
   const candidate = draft.bodies[0];
-  if (referenceBody === undefined || candidate === undefined) {
+  if (candidate === undefined) {
+    return DEFAULT_PREVIEW_DURATION_SECONDS;
+  }
+
+  return estimateBodyPreviewDurationSeconds(snapshotBodies, candidate, draft.referenceBodyId);
+}
+
+export function estimateBodyPreviewDurationSeconds(
+  snapshotBodies: readonly BodyState[],
+  candidate: BodyState,
+  referenceBodyId: string | null,
+): number {
+  const referenceBody = snapshotBodies.find((body) => body.id === referenceBodyId);
+  if (referenceBody === undefined) {
     return DEFAULT_PREVIEW_DURATION_SECONDS;
   }
 

@@ -228,6 +228,55 @@ describe('generateTrajectoryPreview', () => {
     });
   });
 
+  it('没有参考天体时仍输出轨迹并跳过逃逸分类', async () => {
+    const bodies = [body('reference', 0), body('draft', 1e7, 1e7)];
+    const result = await generateTrajectoryPreview(
+      request(bodies, { referenceBodyId: null, durationSeconds: 1, sampleCount: 2 }),
+      () => Promise.resolve(new LinearSimulation(bodies)),
+    );
+
+    expect(result.tracks[0]?.points).toHaveLength(2);
+    expect(result.risk).toEqual({
+      kind: 'stable',
+      bodyId: null,
+      otherBodyId: null,
+      timeSeconds: null,
+    });
+  });
+
+  it('单天体没有接近距离时仍输出稳定轨迹', async () => {
+    const bodies = [body('draft', 10, 5, 1)];
+    const simulation = new LinearSimulation(bodies);
+    const result = await generateTrajectoryPreview(
+      request(bodies, { referenceBodyId: null, durationSeconds: 1, sampleCount: 2 }),
+      () => Promise.resolve(simulation),
+    );
+
+    expect(result.tracks[0]?.points).toHaveLength(2);
+    expect(result.closestApproachMeters).toBeNull();
+    expect(result.risk).toEqual({
+      kind: 'stable',
+      bodyId: null,
+      otherBodyId: null,
+      timeSeconds: null,
+    });
+    expect(simulation.destroyCount).toBe(1);
+  });
+
+  it('没有参考天体时仍返回碰撞风险', async () => {
+    const bodies = [body('obstacle', 0, 0, 2), body('draft', 1, 0, 2)];
+    const result = await generateTrajectoryPreview(request(bodies, { referenceBodyId: null }), () =>
+      Promise.resolve(new LinearSimulation(bodies)),
+    );
+
+    expect(result.risk).toMatchObject({
+      kind: 'collision',
+      bodyId: 'draft',
+      otherBodyId: 'obstacle',
+      timeSeconds: 0,
+    });
+  });
+
   it('采样失败仍释放 simulation', async () => {
     const bodies = [body('reference', 0), body('draft', 10)];
     const simulation = new LinearSimulation(bodies);

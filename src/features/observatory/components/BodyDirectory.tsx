@@ -8,6 +8,7 @@ import {
 
 interface BodyDirectoryProps {
   readonly bodies: readonly BodyState[];
+  readonly disabled?: boolean;
   readonly focusedBodyId: string | null;
   readonly onSelectBody: (bodyId: string) => void;
   readonly selectedBodyId: string | null;
@@ -23,6 +24,7 @@ const directoryGroups: readonly {
 
 export function BodyDirectory({
   bodies,
+  disabled = false,
   focusedBodyId,
   onSelectBody,
   selectedBodyId,
@@ -66,6 +68,7 @@ export function BodyDirectory({
                         aria-label={`聚焦${name}`}
                         className="body-list-item"
                         data-selected={selectedBodyId === body.id ? 'true' : undefined}
+                        disabled={disabled}
                         onClick={() => {
                           onSelectBody(body.id);
                         }}

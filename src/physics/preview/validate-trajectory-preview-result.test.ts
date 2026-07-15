@@ -192,4 +192,24 @@ describe('validateTrajectoryPreviewResultForRequest', () => {
       validateTrajectoryPreviewResultForRequest(malformedResult({ ...result, risk }), request),
     ).toThrow();
   });
+
+  it('没有参考天体时拒绝 escape 风险', () => {
+    const requestWithoutReference = { ...request, referenceBodyId: null };
+    const escapeResult = {
+      ...result,
+      risk: {
+        kind: 'escape',
+        bodyId: 'draft',
+        otherBodyId: 'reference',
+        timeSeconds: request.durationSeconds,
+      },
+    };
+
+    expect(() =>
+      validateTrajectoryPreviewResultForRequest(
+        malformedResult(escapeResult),
+        requestWithoutReference,
+      ),
+    ).toThrow('逃逸风险与请求参考天体或末端时刻不一致');
+  });
 });

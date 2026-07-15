@@ -1,8 +1,9 @@
-import { useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 
 import { Activity, ListTree, Maximize2, RotateCcw, X } from 'lucide-react';
 
 import { CreationModeSwitcher, CreationPanel, useBodyCreation } from '../features/creation';
+import { BodyEditingPanel, useBodyEditing } from '../features/editing';
 import { BodyDirectory } from '../features/observatory/components/BodyDirectory';
 import { BodyInspector } from '../features/observatory/components/BodyInspector';
 import { ObservatoryHeader } from '../features/observatory/components/ObservatoryHeader';
@@ -21,6 +22,7 @@ export function App() {
   const [selectedBodyId, setSelectedBodyId] = useState<string | null>('earth');
   const [focusedBodyId, setFocusedBodyId] = useState<string | null>(null);
   const [viewportKey, setViewportKey] = useState(0);
+  const restoreDeleteActionFocusRef = useRef(false);
   const creation = useBodyCreation({
     simulation,
     onCommitted: (bodyId) => {
@@ -29,10 +31,37 @@ export function App() {
       setMobilePanel(null);
     },
   });
+  const editing = useBodyEditing({
+    simulation,
+    onEdited: ({ bodyId }) => {
+      setSelectedBodyId(bodyId);
+    },
+    onDeleted: ({ deletedBodyId, fallbackBodyId }) => {
+      setSelectedBodyId(fallbackBodyId);
+      setFocusedBodyId((current) => (current === deletedBodyId ? fallbackBodyId : current));
+    },
+  });
+
+  useEffect(() => {
+    if (editing.operation === 'delete') {
+      restoreDeleteActionFocusRef.current = true;
+    }
+    if (editing.active || simulation.commandPending || !restoreDeleteActionFocusRef.current) {
+      return;
+    }
+    const deleteAction = document.querySelector<HTMLButtonElement>('[data-body-action="delete"]');
+    if (deleteAction !== null && !deleteAction.disabled) {
+      deleteAction.focus();
+      restoreDeleteActionFocusRef.current = false;
+    }
+  }, [editing.active, editing.operation, simulation.commandPending]);
 
   const effectiveSelectedBodyId = simulation.bodies.some((body) => body.id === selectedBodyId)
     ? selectedBodyId
     : (simulation.bodies[0]?.id ?? null);
+  const effectiveFocusedBodyId = simulation.bodies.some((body) => body.id === focusedBodyId)
+    ? focusedBodyId
+    : null;
 
   const selectedBody = useMemo(
     () => simulation.bodies.find((body) => body.id === effectiveSelectedBodyId) ?? null,
@@ -40,9 +69,12 @@ export function App() {
   );
   const visibleError = renderError ?? (simulation.phase === 'error' ? simulation.error : null);
   const simulationTime = formatSimulationTime(simulation.simulationTimeSeconds);
-  const viewMode = focusedBodyId === null ? 'overview' : 'focus';
+  const viewMode = effectiveFocusedBodyId === null ? 'overview' : 'focus';
 
   const selectBody = (bodyId: string) => {
+    if (editing.active) {
+      return;
+    }
     setSelectedBodyId(bodyId);
     setFocusedBodyId(bodyId);
     setMobilePanel('details');
@@ -65,6 +97,11 @@ export function App() {
       data-phase={simulation.phase}
       data-mode={creation.mode}
       data-creation-phase={creation.mode === 'create' ? creation.phase : 'inactive'}
+      data-editing-active={editing.active}
+      data-editing-accepted-preview-revision={editing.acceptedPreviewRevision ?? 'none'}
+      data-editing-candidate-revision={editing.candidateRevision}
+      data-editing-operation={editing.operation ?? 'inactive'}
+      data-editing-phase={editing.active ? editing.phase : 'inactive'}
       data-body-revision={simulation.bodyRevision}
       data-body-snapshot-time-seconds={simulation.bodySnapshotSimulationTimeSeconds}
       data-simulation-time-seconds={simulation.simulationTimeSeconds}
@@ -74,8 +111,8 @@ export function App() {
       <UniverseViewport
         bodies={simulation.bodies}
         className="universe-viewport"
-        creationState={creation.overlayState}
-        focusBodyId={focusedBodyId}
+        creationState={creation.mode === 'create' ? creation.overlayState : editing.overlayState}
+        focusBodyId={effectiveFocusedBodyId}
         key={viewportKey}
         onBackendChange={(nextBackend) => {
           setBackend(nextBackend);
@@ -108,6 +145,7 @@ export function App() {
       />
 
       <CreationModeSwitcher
+        disabled={editing.active || simulation.commandPending}
         mode={creation.mode}
         onModeChange={(mode) => {
           if (mode === 'create') {
@@ -136,13 +174,16 @@ export function App() {
         </button>
         <BodyDirectory
           bodies={simulation.bodies}
-          focusedBodyId={focusedBodyId}
+          disabled={editing.active}
+          focusedBodyId={effectiveFocusedBodyId}
           onSelectBody={selectBody}
           selectedBodyId={effectiveSelectedBodyId}
         />
       </aside>
 
-      {creation.mode === 'observe' ? (
+      {editing.active ? (
+        <BodyEditingPanel controller={editing} />
+      ) : creation.mode === 'observe' ? (
         <aside
           aria-label="天体数据"
           className="observatory-panel body-inspector-panel"
@@ -160,10 +201,13 @@ export function App() {
             <X aria-hidden="true" size={18} />
           </button>
           <BodyInspector
+            actionsDisabled={simulation.commandPending}
             baselineDiagnostics={simulation.baselineDiagnostics}
             body={selectedBody}
             bodies={simulation.bodies}
             diagnostics={simulation.diagnostics}
+            onDeleteBody={editing.enterDelete}
+            onEditBody={editing.enterEdit}
           />
         </aside>
       ) : (
@@ -207,7 +251,7 @@ export function App() {
       </nav>
 
       <TimeControls
-        commandPending={simulation.commandPending || creation.mode === 'create'}
+        commandPending={simulation.commandPending || creation.mode === 'create' || editing.active}
         onPause={() => {
           void simulation.pause().catch(() => undefined);
         }}

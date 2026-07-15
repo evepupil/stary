@@ -65,6 +65,7 @@ export interface CreationPreview {
 
 export interface CreationOverlayState {
   readonly enabled: boolean;
+  readonly cameraMode: 'creation' | 'preserve';
   readonly interactive: boolean;
   readonly draftBodies: readonly BodyState[];
   readonly placement: CreationPlacement | null;

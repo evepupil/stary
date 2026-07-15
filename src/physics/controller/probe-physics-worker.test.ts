@@ -515,7 +515,10 @@ describe('PhysicsWorkerController', () => {
     const stale = controller.replaceBodies(secondBodies, 0, 0);
 
     await expect(first).resolves.toMatchObject({ bodyRevision: 1 });
-    await expect(stale).rejects.toThrow('bodyRevisionConflict');
+    await expect(stale).rejects.toMatchObject({
+      code: 'bodyRevisionConflict',
+      name: 'PhysicsWorkerCommandError',
+    });
     await expect(controller.replaceBodies(secondBodies, 1, 0)).resolves.toMatchObject({
       bodyRevision: 2,
     });
@@ -608,9 +611,12 @@ describe('PhysicsWorkerController', () => {
     await controller.initialize([testBody]);
     await controller.step(10);
 
-    await expect(controller.replaceBodies([{ ...testBody, id: 'stale' }], 0, 0)).rejects.toThrow(
-      'bodySnapshotConflict',
-    );
+    await expect(
+      controller.replaceBodies([{ ...testBody, id: 'stale' }], 0, 0),
+    ).rejects.toMatchObject({
+      code: 'bodySnapshotConflict',
+      name: 'PhysicsWorkerCommandError',
+    });
     expect(controller.bodyRevision).toBe(0);
     await expect(
       controller.replaceBodies([{ ...testBody, id: 'current' }], 0, 10),

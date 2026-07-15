@@ -51,6 +51,12 @@ function describeError(error: unknown): Error {
   return error instanceof Error ? error : new Error('宇宙模拟器发生未知错误');
 }
 
+function createInvalidatedCommandError(): Error {
+  const error = new Error('物理命令所属的 Worker 会话已失效');
+  error.name = 'AbortError';
+  return error;
+}
+
 export function useUniverseSimulation(): UniverseSimulation {
   const [restartKey, setRestartKey] = useState(0);
   const [simulation, setSimulation] = useState<UniverseSimulationState>(() =>
@@ -103,7 +109,7 @@ export function useUniverseSimulation(): UniverseSimulation {
 
       const commandResult = commandQueueRef.current.then(async () => {
         if (generationRef.current !== generation || controllerRef.current !== controller) {
-          return;
+          throw createInvalidatedCommandError();
         }
         await command(controller);
       });

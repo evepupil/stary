@@ -51,7 +51,7 @@ export async function generateTrajectoryPreview(
       request.sampleCount,
       request.bodies.length,
     );
-    let closestApproachMeters = Number.POSITIVE_INFINITY;
+    let closestApproachMeters: number | null = null;
     let earliestCollision: CollisionCandidate | null = null;
     let previousSnapshot = restoreInertialFrame(simulation.snapshot(), inertialFrameOrigin, 0);
     let previousTimeSeconds = 0;
@@ -66,7 +66,7 @@ export async function generateTrajectoryPreview(
         first.positionMeters.y - second.positionMeters.y,
         first.positionMeters.z - second.positionMeters.z,
       );
-      closestApproachMeters = Math.min(closestApproachMeters, distanceMeters);
+      closestApproachMeters = Math.min(closestApproachMeters ?? distanceMeters, distanceMeters);
       if (distanceMeters <= first.radiusMeters + second.radiusMeters) {
         earliestCollision ??= {
           bodyId: pair[0],
@@ -110,7 +110,10 @@ export async function generateTrajectoryPreview(
             secondStart.positionMeters,
             secondEnd.positionMeters,
           );
-          closestApproachMeters = Math.min(closestApproachMeters, approach.distanceMeters);
+          closestApproachMeters = Math.min(
+            closestApproachMeters ?? approach.distanceMeters,
+            approach.distanceMeters,
+          );
           const collisionDistanceMeters = firstEnd.radiusMeters + secondEnd.radiusMeters;
           const collisionFraction =
             approach.distanceMeters <= collisionDistanceMeters
@@ -150,10 +153,6 @@ export async function generateTrajectoryPreview(
         mapBodiesById(trackSnapshot.bodies, request.bodies.length),
         trackTimeSeconds,
       );
-    }
-
-    if (!Number.isFinite(closestApproachMeters)) {
-      throw new Error('轨道预览没有产生有效采样');
     }
 
     const finalBodiesById = mapBodiesById(previousSnapshot.bodies, request.bodies.length);
@@ -301,7 +300,7 @@ function requireBody(bodiesById: ReadonlyMap<string, BodyState>, bodyId: string)
 function classifyRisk(
   collision: CollisionCandidate | null,
   draftBodyIds: readonly string[],
-  referenceBodyId: string,
+  referenceBodyId: string | null,
   finalBodiesById: ReadonlyMap<string, BodyState>,
   durationSeconds: number,
 ): TrajectoryPreviewRisk {
@@ -312,6 +311,10 @@ function classifyRisk(
       otherBodyId: collision.otherBodyId,
       timeSeconds: collision.timeSeconds,
     };
+  }
+
+  if (referenceBodyId === null) {
+    return { kind: 'stable', bodyId: null, otherBodyId: null, timeSeconds: null };
   }
 
   const referenceBody = requireBody(finalBodiesById, referenceBodyId);
