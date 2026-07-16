@@ -282,7 +282,7 @@ export const collisionEventSchema = z
     eventId: physicsIdentifierSchema,
     modelVersion: z.string().min(1).max(128),
     participantBodyIds: z.tuple([physicsIdentifierSchema, physicsIdentifierSchema]),
-    classification: collisionClassificationSchema,
+    classification: collisionClassificationSchema.or(z.literal('blackHoleAccretion')),
     specificImpactEnergyJoulesPerKg: nonNegativeFiniteNumberSchema,
     disruptionThresholdJoulesPerKg: positiveFiniteNumberSchema.nullable(),
     normalizedImpactEnergy: nonNegativeFiniteNumberSchema.nullable(),

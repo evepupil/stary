@@ -16,11 +16,12 @@ M3 保持四条硬边界：
 - M3 Task 1 已建立 `src/physics/collisions/`，包含来源锁、接触量、破坏标度、分类、材料、候选门禁和 event-total 守恒账本。
 - M3 Task 2 已把正式协议与预览协议升级到 v3，`BodyState` 携带材料、自转、惯量和碰撞模型。
 - M3 Task 3 已交付事件式 REBOUND C 桥与 TypeScript 适配器；正式 `PhysicsWorkerRuntime` 仍在等待 Task 5 原子事务，因此当前运行循环继续调用 `integrateTo(targetTime)`。
+- M3 Task 4 已交付固定 Rust/WASM 碰撞内核、TypeScript 参考实现与严格业务 envelope；正式 Worker 已携带 Collision WASM 产物地址，调用内核、候选复算和原子提交仍归 Task 5。
 - REBOUND C 桥已经提供稳定 token 句柄、IAS15 推进、连续接触、同刻 pair、快照、能量和角动量导出。
 - `replaceBodies` 已具备候选实例、首帧校验、原子切换、修订冲突和失败回滚。
 - 轨道预览已经用扫掠线段识别有限采样间的碰撞风险。这条路径只负责预警，无法保证捕获 IAS15 步内的弯曲接触。
-- 仓库当前没有 Rust crate、Rust 工具链锁或正式碰撞 WASM。
-- M2 最终生产包只允许一个 REBOUND WASM。引入碰撞内核后，门禁要改成分别要求一个 REBOUND WASM 和一个 Collision WASM。
+- `crates/stary-collision/` 固定 Rust 1.96.0、`wasm32-unknown-unknown`、Docker 镜像摘要、Cargo 依赖、全部本地源码和构建脚本；正式 Collision WASM 为 361,709 字节，SHA-256 为 `C2D01ACB56BB528625FB90D0D651000CB30A1E59FCBE6931B14076BB735CD5D3`。
+- 生产构建门禁现在分别要求并校验唯一 REBOUND WASM 与唯一 Collision WASM；轨道预览 Worker 只引用 REBOUND，正式物理 Worker 同时携带两个固定产物。
 
 ## 科学模型
 
@@ -275,7 +276,7 @@ v3 一次性升级以下公共结构：
 
 完成依据：固定 C 桥在一次原生 `reb_simulation_integrate()` 内通过 heartbeat 观察 IAS15 接受步。每段先验证 separation enclosure，再使用端点弦、曲率下界和径向变化上界；无法证明时从同一步首 checkpoint 左优先回放，达到深度、节点或 replay 预算会回滚并明确失败。穿透求真实表面间隙的最早零点，正切求径向速度零点；同刻集合保留根时间位于时间容差内的 pair，并补收最早快照中正在接近或相切的 pair。定向测试覆盖高速步中穿透、正切与近切两侧、强弯曲近掠、分离重叠被引力拉回、同刻与错峰接触、固定 seed 的 `2..10` 体真实引力 `200x` 细 REBOUND 参考、无事件逐值等价、4096/4097 pair 精确容量边界、非 IAS15 拒绝、重复清理和 stale handle。固定原型门禁通过 26 条 Node 测试与 1000 周期数值验收；项目门禁通过 58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright。正式 Worker 的单步与连续运行会在 Task 5 一次切换到该共享 API。
 
-### Task 4：交付 Rust/WASM 碰撞内核
+### Task 4：交付 Rust/WASM 碰撞内核（已完成）
 
 - 新建固定 Rust 工具链、crate、构建脚本、C ABI、内存所有权和产物哈希。
 - 实现二体 EDACM、Genda 临界线、材料剥离、黑洞吞噬、主要残体、tracer、dust cohort 和 event-total 账本。
@@ -284,6 +285,14 @@ v3 一次性升级以下公共结构：
 - 构建门禁分别验证唯一 REBOUND WASM 和唯一 Collision WASM。
 
 完成门槛：成功、失败、畸形输入、alloc/free 和重复销毁都可验证，无 NaN、Infinity 或越界内存。
+
+完成依据：固定 Rust 1.96.0 容器门禁通过 `cargo fmt`、11 项 Rust 测试、Clippy `-D warnings` 和 release `wasm32-unknown-unknown` 构建，随后校验产物哈希、无宿主导入的导出白名单和完整 token 生命周期。ABI 版本为 `1`，使用单调 token 管理请求与响应缓冲区，请求上限为 1 MiB、响应上限为 16 MiB；stale handle、重复销毁、非法状态、内存增长后重新取视图和异常清理均有证据。
+
+工程确定性 v1 保留 EDACM/Genda 的分类与最大残体标度，并把论文没有给出的三维重建明确记录为产品近似：合并结果使用质心位置和速度，总轨道角动量与父体自旋进入残体自旋；hit-and-run 镜像入射径向速度；部分吸积和侵蚀生成一个主要残体与一个 tracer；灾难和超灾难破坏生成一个主要残体与一个 dust cohort；材料先汇总到四种材料桶，再由外向内剥离。碎裂切向速度保持轨道角动量，径向分离最多使用可用机械能的 25%；无法在非负耗散下闭合时返回结构化错误，禁止伪造通过账本。
+
+黑洞使用独立 `blackHoleAccretion` domain：质量和质心动量合并，Schwarzschild 半径重建残体，总角动量进入自旋，被吞经典材料单独记录；能量账本明确限定为质心系相对动能进入辐射，不声明完整相对论并合。经典事件账本限定为本次二体参与者和本次生成资产的 `participantLocalEventTotal`；完整宇宙、同刻批次势能和被动资产长期推进在 Task 5 原子事务中统一复算。
+
+TypeScript 严格 schema 会拒绝版本错误、共享参与体、重复 ID、容量不足、额外字段和未通过守恒的成功结果。真实 Collision WASM 与 TypeScript 参考实现的对照覆盖 merge、hit-and-run、灾难性破坏、稳定批次排序和黑洞吞噬；定向矩阵另覆盖部分吸积和结构化失败。3 个定向 Vitest 文件共 16 项测试通过。完整 `pnpm check` 通过 61 个 Vitest 文件共 408 项测试、生产双 WASM 构建和 28 条 Playwright 浏览器验收。
 
 ### Task 5：接入正式 Worker 原子碰撞事务
 

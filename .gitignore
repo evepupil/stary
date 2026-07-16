@@ -1,5 +1,7 @@
 node_modules/
 dist/
+!crates/stary-collision/dist/
+!crates/stary-collision/dist/stary_collision.wasm
 coverage/
 playwright-report/
 test-results/
@@ -7,3 +9,4 @@ test-results/
 
 # REBOUND source and build cache are reproducible inputs, not repository content.
 spikes/rebound-wasm/.cache/
+crates/stary-collision/target/

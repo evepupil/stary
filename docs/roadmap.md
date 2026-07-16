@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M2 真实画面已通过验收。M3 Task 1 到 Task 3 已完成科学模型底座、协议 v3、场景物理资料和 REBOUND 连续接触桥，下一步执行 Task 4 的 Rust/WASM 碰撞内核。
+M2 真实画面已通过验收。M3 Task 1 到 Task 4 已完成科学模型底座、协议 v3、场景物理资料、REBOUND 连续接触桥和固定 Rust/WASM 碰撞内核，下一步执行 Task 5 的正式 Worker 原子碰撞事务。
 
 ## Milestones
 
@@ -42,11 +42,12 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 3 已完成科学模型底�
 - M3 Task 1：已完成。交付来源锁、接触量、EDACM/Genda 公式、材料剥离、确定性 seed、event-total 守恒账本、候选全链复算和原始输入绑定；6 个测试文件共 41 项定向测试通过。
 - M3 Task 2：已完成。正式协议与预览协议升级到 v3，增加精确回执、完整物理状态、碰撞批次与双层诊断；太阳系和六类创建预设补齐材料、自转、惯量及碰撞模型。完整门禁通过 57 个 Vitest 文件共 390 项测试、生产构建和 28 条 Playwright。
 - M3 Task 3：已完成。固定 REBOUND C 桥交付 IAS15 连续接触、checkpoint 回放、最早时刻、同刻 pair、幂等确认和 token 句柄；26 条原型测试、58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright 全部通过。
+- M3 Task 4：已完成。固定 Rust 1.96.0 crate 交付工程确定性 v1 的 EDACM/Genda 分类、残体重建、材料路由、黑洞吞噬和参与体局部 event-total 账本；C ABI 使用单调 token 管理有界 JSON 缓冲区，真实 Collision WASM 与 TypeScript 参考实现完成跨语言对照；完整门禁通过 61 个 Vitest 文件共 408 项测试、生产双 WASM 构建和 28 条 Playwright。
 
 ## Next Recommended Steps
 
-1. 执行 M3 Task 4，交付固定 Rust/WASM 碰撞内核、跨语言黄金值、内存所有权和产物锁。
-2. 随后把连续接触与 Rust 候选接入正式 Worker 原子碰撞事务。
+1. 执行 M3 Task 5，把连续接触与 Rust 候选接入正式 Worker 原子碰撞事务。
+2. 随后交付主要碎块、tracer、dust cohort 和碰撞观察界面。
 
 ## Inbox
 
@@ -100,6 +101,7 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 3 已完成科学模型底�
 | 2026-07-15 | M3 采用 REBOUND 检测、Rust 分类和 TypeScript 原子事务                     | 连续接触留在积分时间线，候选结果通过守恒后才进入正式宇宙                             | `docs/2026-07-15-stary-m3-collisions-debris.md` |
 | 2026-07-15 | M3 协议 v3 增加材料层、自转和碰撞账本                                     | 合并和碎裂需要解释物质去向，并满足含自转的角动量与能量门槛                           | `docs/2026-07-15-stary-m3-collisions-debris.md` |
 | 2026-07-16 | M3 候选复算完整公式并绑定原始两体输入与本地材料档                         | 阻止 Rust/WASM 返回其他天体、其他材料或跨过离散边界的自洽候选                        | `docs/模块设计/碰撞与碎片.md`                   |
+| 2026-07-16 | M3 残体生成采用工程确定性 v1                                              | 保留论文分类和最大残体标度，以显式近似重建可守恒、可复现的残体和被动资产             | `docs/2026-07-15-stary-m3-collisions-debris.md` |
 
 ## Recent Progress
 
@@ -127,3 +129,4 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 3 已完成科学模型底�
 - 2026-07-16：完成 M3 Task 1；交付碰撞纯函数、严格候选门禁、材料剥离、event-total 守恒账本和跨语言黄金样例，下一步进入 Task 2。
 - 2026-07-16：完成 M3 Task 2；正式与预览协议升级到 v3，太阳系和创建预设补齐碰撞资料，下一步进入 Task 3 连续接触桥。
 - 2026-07-16：完成 M3 Task 3；交付 REBOUND 连续接触、最早接触时刻、同刻 pair、checkpoint 回滚、资源预算和固定产物锁，下一步进入 Task 4 Rust/WASM 碰撞内核。
+- 2026-07-16：完成 M3 Task 4；交付固定 Rust/WASM 碰撞内核、工程确定性残体重建、黑洞吞噬、跨语言对照、C ABI 所有权和双 WASM 生产产物门禁，下一步进入 Task 5 正式 Worker 原子碰撞事务。

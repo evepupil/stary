@@ -68,3 +68,29 @@ export {
 export { computeCollisionLedger, type CollisionLedgerInput } from './conservation';
 export { createDeterministicCollisionSeed } from './deterministic-seed';
 export { parseCollisionResolutionCandidateForInput } from './candidate-validation';
+export {
+  BLACK_HOLE_ACCRETION_LEDGER_VERSION,
+  COLLISION_KERNEL_ABI_VERSION,
+  COLLISION_KERNEL_CAPACITY_SEMANTICS,
+  COLLISION_RECONSTRUCTION_APPROXIMATIONS,
+  COLLISION_RECONSTRUCTION_VERSION,
+  blackHoleAccretionLedgerSchema,
+  collisionKernelBatchRequestSchema,
+  collisionKernelEventRequestSchema,
+  collisionKernelEventResolutionSchema,
+  collisionKernelResponseSchema,
+  type BlackHoleAccretionLedger,
+  type CollisionKernelBatchRequest,
+  type CollisionKernelErrorCode,
+  type CollisionKernelEventRequest,
+  type CollisionKernelEventResolution,
+  type CollisionKernelResponse,
+} from './kernel-schemas';
+export { resolveCollisionKernelReference } from './kernel-reference';
+export {
+  CollisionKernelWasmError,
+  createCollisionKernelWasm,
+  loadCollisionKernelWasm,
+  type CollisionKernelWasm,
+  type CollisionKernelWasmLoadOptions,
+} from './collision-kernel-wasm';

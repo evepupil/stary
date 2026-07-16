@@ -1,5 +1,6 @@
 import { createReboundSimulation } from '../physics/rebound/rebound-simulation';
 import { PhysicsWorkerRuntime } from '../physics/runtime/physics-worker-runtime';
+import { COLLISION_WASM_URL } from '../platform/wasm/collision-asset';
 
 interface PhysicsWorkerScope {
   addEventListener(type: 'message', listener: (event: MessageEvent<unknown>) => void): void;
@@ -10,6 +11,7 @@ interface PhysicsWorkerScope {
 
 const workerScope = self as unknown as PhysicsWorkerScope;
 const runtime = new PhysicsWorkerRuntime({
+  collisionKernelWasmUrl: COLLISION_WASM_URL,
   closeWorker: () => {
     workerScope.close();
   },

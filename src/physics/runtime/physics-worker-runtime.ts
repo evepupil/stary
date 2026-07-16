@@ -22,6 +22,7 @@ type RuntimeResponsePayload<Message extends WorkerToMainMessage = WorkerToMainMe
     : never;
 
 export interface PhysicsWorkerRuntimeOptions {
+  readonly collisionKernelWasmUrl?: string;
   readonly closeWorker?: () => void;
   readonly createSimulation: CreatePhysicsSimulation;
   readonly postMessage: (message: WorkerToMainMessage) => void;
@@ -40,6 +41,7 @@ function boundedErrorMessage(message: string): string {
 }
 
 export class PhysicsWorkerRuntime {
+  public readonly collisionKernelWasmUrl: string | null;
   readonly #closeWorker: () => void;
   readonly #createSimulation: CreatePhysicsSimulation;
   readonly #postMessage: (message: WorkerToMainMessage) => void;
@@ -59,6 +61,7 @@ export class PhysicsWorkerRuntime {
   #timeScale = 1;
 
   constructor(options: PhysicsWorkerRuntimeOptions) {
+    this.collisionKernelWasmUrl = options.collisionKernelWasmUrl ?? null;
     this.#closeWorker = options.closeWorker ?? (() => undefined);
     this.#createSimulation = options.createSimulation;
     this.#postMessage = options.postMessage;

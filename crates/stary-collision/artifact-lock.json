@@ -1,0 +1,93 @@
+{
+  "schemaVersion": 1,
+  "toolchain": {
+    "cargo": "cargo 1.96.0 (30a34c682 2026-05-25)",
+    "channel": "1.96.0",
+    "rustc": "rustc 1.96.0 (ac68faa20 2026-05-25)",
+    "target": "wasm32-unknown-unknown"
+  },
+  "buildImage": {
+    "digest": "sha256:c993d32d95cc146bd12c84d66f0b924a6a96f3988325f39c144f2f9893dea120",
+    "image": "rust:1.96.0-bookworm",
+    "platform": "linux/amd64"
+  },
+  "inputs": [
+    {
+      "path": "../../src/physics/collisions/fixtures/collision-golden-v1.json",
+      "bytes": 3309,
+      "sha256": "63472CBDF9980B321603619F74F9AD831BFFFF4169F6FC8B9795DBA72041B91E"
+    },
+    {
+      "path": "Cargo.lock",
+      "bytes": 2672,
+      "sha256": "2D6A670367097A78BE425C0EF08D1A36B70F79008DD2F5A97641E502534037A0"
+    },
+    {
+      "path": "Cargo.toml",
+      "bytes": 423,
+      "sha256": "C00D6610C9A3BD9AB3EF491F714EC8EFC074D59734016D0606BBFFFF3A272454"
+    },
+    {
+      "path": "rust-toolchain.toml",
+      "bytes": 88,
+      "sha256": "23794DFC365530E7749B589631E09DB35DFBCC58E79B21B4185622406587FE84"
+    },
+    {
+      "path": "scripts/build.ps1",
+      "bytes": 729,
+      "sha256": "F8B6CFBCA361EFC6F611849C39C8608E2895416CF86F38B200069FB370191C7D"
+    },
+    {
+      "path": "scripts/build-in-container.sh",
+      "bytes": 905,
+      "sha256": "768BCD9922E1236120C04178BF93646641C3B2841059B4490DBC5162B55CFDA2"
+    },
+    {
+      "path": "scripts/verify.ps1",
+      "bytes": 589,
+      "sha256": "1CD7847DAAA86BB624C75122336EFA4003D810F0382318221E43E03C834833D1"
+    },
+    {
+      "path": "scripts/verify-exports.mjs",
+      "bytes": 4175,
+      "sha256": "9191FDF5C1F53762AFDD0B281ACF80EBC2829A46F696B0CADFD505EF477F086F"
+    },
+    {
+      "path": "src/abi.rs",
+      "bytes": 5867,
+      "sha256": "E0C3FA1D6EBAECF789BCBD97265CB6B3C5909DDDF1D3EBB665DFBC88F4E10CA6"
+    },
+    {
+      "path": "src/kernel.rs",
+      "bytes": 11495,
+      "sha256": "DB423581EAC5F49CBE119B78C7421451269BFCCA05CD4D05900FC8D0FC85B1C1"
+    },
+    {
+      "path": "src/ledger.rs",
+      "bytes": 14420,
+      "sha256": "D09C2A0EE9397779A33207B61A0BCA1D515D324A66EF594D5D92DA0E957AAC62"
+    },
+    {
+      "path": "src/lib.rs",
+      "bytes": 341,
+      "sha256": "49C277FFF3ADE398D3CB2CB1EEF70E6E33D0CA5A0ED409FCF2DACB4FCD9E9227"
+    },
+    {
+      "path": "src/model.rs",
+      "bytes": 15776,
+      "sha256": "926D4CD8E13F90153ABC3189FEF213419F1661DD2FAF149119E48A364F8210EB"
+    },
+    {
+      "path": "src/physics.rs",
+      "bytes": 54397,
+      "sha256": "B73D8674BAF544E0CBAE1979531BC4F270078B2BC4098994ADB7C0D1D62AE203"
+    }
+  ],
+  "artifacts": [
+    {
+      "path": "dist/stary_collision.wasm",
+      "bytes": 361709,
+      "sha256": "C2D01ACB56BB528625FB90D0D651000CB30A1E59FCBE6931B14076BB735CD5D3"
+    }
+  ]
+}

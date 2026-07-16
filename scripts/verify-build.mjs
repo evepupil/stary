@@ -8,6 +8,8 @@ const projectRoot = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '
 const distDirectory = path.join(projectRoot, 'dist');
 const reboundSpikeDirectory = path.join(projectRoot, 'spikes', 'rebound-wasm');
 const artifactLockPath = path.join(reboundSpikeDirectory, 'artifact-lock.json');
+const collisionCrateDirectory = path.join(projectRoot, 'crates', 'stary-collision');
+const collisionArtifactLockPath = path.join(collisionCrateDirectory, 'artifact-lock.json');
 const planetaryManifestPath = path.join(
   projectRoot,
   'src',
@@ -19,6 +21,7 @@ const planetaryManifestPath = path.join(
 );
 const lockedGluePath = 'dist/rebound.mjs';
 const lockedWasmPath = 'dist/rebound.wasm';
+const lockedCollisionWasmPath = 'dist/stary_collision.wasm';
 
 async function listFiles(directory) {
   const entries = await readdir(directory, { withFileTypes: true });
@@ -133,10 +136,15 @@ function readPlanetaryAssets(manifest) {
 }
 
 const artifactLock = JSON.parse(await readFile(artifactLockPath, 'utf8'));
+const collisionArtifactLock = JSON.parse(await readFile(collisionArtifactLockPath, 'utf8'));
 const planetaryManifest = JSON.parse(await readFile(planetaryManifestPath, 'utf8'));
 const planetaryAssets = readPlanetaryAssets(planetaryManifest);
 const lockedGlueArtifact = readLockedArtifact(artifactLock, lockedGluePath);
 const lockedWasmArtifact = readLockedArtifact(artifactLock, lockedWasmPath);
+const lockedCollisionWasmArtifact = readLockedArtifact(
+  collisionArtifactLock,
+  lockedCollisionWasmPath,
+);
 const files = await listFiles(distDirectory);
 const relativeFiles = files.map((file) => path.relative(distDirectory, file).replaceAll('\\', '/'));
 
@@ -162,8 +170,8 @@ if (relativeFiles.some((file) => file.includes('foundation.worker'))) {
 }
 
 const wasmFiles = relativeFiles.filter((file) => file.endsWith('.wasm'));
-if (wasmFiles.length !== 1) {
-  throw new Error(`应产出一个 REBOUND WASM 资源，实际为 ${wasmFiles.length} 个`);
+if (wasmFiles.length !== 2) {
+  throw new Error(`应产出 REBOUND 与 Collision 两个 WASM 资源，实际为 ${wasmFiles.length} 个`);
 }
 
 const manifest = JSON.parse(
@@ -171,8 +179,13 @@ const manifest = JSON.parse(
 );
 const sourceWasmPath = path.join(reboundSpikeDirectory, ...lockedWasmPath.split('/'));
 const sourceGluePath = path.join(reboundSpikeDirectory, ...lockedGluePath.split('/'));
+const sourceCollisionWasmPath = path.join(
+  collisionCrateDirectory,
+  ...lockedCollisionWasmPath.split('/'),
+);
 const sourceGlue = await readFile(sourceGluePath);
 const sourceWasm = await readFile(sourceWasmPath);
+const sourceCollisionWasm = await readFile(sourceCollisionWasmPath);
 const localBuildInputs = [
   ['REBOUND bridge C 源码', 'src/rebound_bridge.c', 'bridgeSha256'],
   ['REBOUND continuous contact C 源码', 'src/rebound_contact.c', 'contactSha256'],
@@ -183,7 +196,27 @@ for (const [label, relativePath, inputName] of localBuildInputs) {
   const content = await readFile(path.join(reboundSpikeDirectory, ...relativePath.split('/')));
   assertLockedHash(label, content, artifactLock.inputs?.[inputName]);
 }
-const builtWasm = await readFile(path.join(distDirectory, wasmFiles[0]));
+const builtWasmEntries = await Promise.all(
+  wasmFiles.map(async (file) => ({
+    content: await readFile(path.join(distDirectory, file)),
+    file,
+  })),
+);
+function findBuiltWasm(label, lockedArtifact) {
+  const matches = builtWasmEntries.filter(
+    ({ content }) =>
+      content.byteLength === lockedArtifact.bytes && sha256(content) === lockedArtifact.sha256,
+  );
+  if (matches.length !== 1) {
+    throw new Error(`${label} 应在生产产物中恰好出现一次，实际匹配 ${matches.length} 个`);
+  }
+  return matches[0];
+}
+const builtReboundWasm = findBuiltWasm('REBOUND WASM', lockedWasmArtifact);
+const builtCollisionWasm = findBuiltWasm('Collision WASM', lockedCollisionWasmArtifact);
+if (builtReboundWasm.file === builtCollisionWasm.file) {
+  throw new Error('REBOUND 与 Collision WASM 不能指向同一个生产产物');
+}
 const builtWorker = await readFile(path.join(distDirectory, workerFiles[0]), 'utf8');
 const builtOrbitPreviewWorker = await readFile(
   path.join(distDirectory, orbitPreviewWorkerFiles[0]),
@@ -191,7 +224,9 @@ const builtOrbitPreviewWorker = await readFile(
 );
 assertLockedWasm('正式层使用的 REBOUND 胶水模块', sourceGlue, lockedGlueArtifact);
 assertLockedWasm('原型 REBOUND WASM', sourceWasm, lockedWasmArtifact);
-assertLockedWasm('生产 REBOUND WASM', builtWasm, lockedWasmArtifact);
+assertLockedWasm('生产 REBOUND WASM', builtReboundWasm.content, lockedWasmArtifact);
+assertLockedWasm('Collision WASM 源产物', sourceCollisionWasm, lockedCollisionWasmArtifact);
+assertLockedWasm('生产 Collision WASM', builtCollisionWasm.content, lockedCollisionWasmArtifact);
 if (
   !builtWorker.includes('_stary_reb_create') ||
   !builtWorker.includes('_stary_reb_integrate') ||
@@ -200,12 +235,19 @@ if (
 ) {
   throw new Error('正式物理 Worker 没有包含锁定 REBOUND 胶水模块的关键导出');
 }
-const builtWasmFileName = path.posix.basename(wasmFiles[0]);
-if (!builtWorker.includes(builtWasmFileName)) {
-  throw new Error(`正式物理 Worker 没有引用唯一 REBOUND WASM 产物 ${builtWasmFileName}`);
+const builtReboundWasmFileName = path.posix.basename(builtReboundWasm.file);
+const builtCollisionWasmFileName = path.posix.basename(builtCollisionWasm.file);
+if (!builtWorker.includes(builtReboundWasmFileName)) {
+  throw new Error(`正式物理 Worker 没有引用唯一 REBOUND WASM 产物 ${builtReboundWasmFileName}`);
 }
-if (!builtOrbitPreviewWorker.includes(builtWasmFileName)) {
-  throw new Error(`轨道预览 Worker 没有引用唯一 REBOUND WASM 产物 ${builtWasmFileName}`);
+if (!builtWorker.includes(builtCollisionWasmFileName)) {
+  throw new Error(`正式物理 Worker 没有引用唯一 Collision WASM 产物 ${builtCollisionWasmFileName}`);
+}
+if (!builtOrbitPreviewWorker.includes(builtReboundWasmFileName)) {
+  throw new Error(`轨道预览 Worker 没有引用唯一 REBOUND WASM 产物 ${builtReboundWasmFileName}`);
+}
+if (builtOrbitPreviewWorker.includes(builtCollisionWasmFileName)) {
+  throw new Error('轨道预览 Worker 不应加载 Collision WASM');
 }
 const orbitPreviewWorkerMarkers = [
   '_stary_reb_create',

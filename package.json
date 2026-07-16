@@ -10,15 +10,18 @@
   },
   "scripts": {
     "dev": "vite",
-    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
-    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
-    "lint": "eslint \"src/**/*.{ts,tsx}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" --max-warnings=0",
+    "format": "prettier --write \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"crates/stary-collision/scripts/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
+    "format:check": "prettier --check \"src/**/*.{ts,tsx,css}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"crates/stary-collision/scripts/*.mjs\" \"index.html\" \"package.json\" \"tsconfig*.json\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" \".prettierrc.json\" \"docs/模块设计/*.md\"",
+    "lint": "eslint \"src/**/*.{ts,tsx}\" \"e2e/**/*.ts\" \"scripts/**/*.mjs\" \"crates/stary-collision/scripts/*.mjs\" \"vite.config.ts\" \"playwright.config.ts\" \"eslint.config.js\" --max-warnings=0",
     "typecheck": "tsc -b",
     "test": "vitest run",
     "test:e2e": "pnpm build && playwright test",
     "test:performance": "pnpm build && playwright test e2e/observatory-performance.spec.ts",
     "test:e2e:install": "playwright install chrome",
-    "build": "tsc -b && vite build && node scripts/verify-build.mjs",
+    "build:collision-wasm": "powershell -NoProfile -ExecutionPolicy Bypass -File crates/stary-collision/scripts/build.ps1",
+    "verify:collision-wasm": "powershell -NoProfile -ExecutionPolicy Bypass -File crates/stary-collision/scripts/verify.ps1",
+    "check:collision-wasm": "node crates/stary-collision/scripts/verify-artifacts.mjs && node crates/stary-collision/scripts/verify-exports.mjs",
+    "build": "tsc -b && pnpm check:collision-wasm && vite build && node scripts/verify-build.mjs",
     "check": "pnpm format:check && pnpm lint && pnpm typecheck && pnpm test && pnpm build && playwright test"
   },
   "dependencies": {

@@ -24,17 +24,19 @@
 ## 当前工具链
 
 - 语言与运行时：Node.js `22.14.0`；TypeScript `6.0.3`，应用与构建配置均开启 `strict`。
+- 碰撞内核：Rust 与 Cargo `1.96.0`，目标固定为 `wasm32-unknown-unknown`；正式产物使用锁定摘要的 `rust:1.96.0-bookworm`、`linux/amd64` 容器构建。
 - 包管理与构建工具：pnpm `10.21.0`、Vite `8.1.4`、React `19.2.7`、Three.js `0.185.1`。
 - 测试与代码质量：Vitest `4.1.10`、Playwright `1.61.1`、ESLint `10.7.0`、Prettier `3.9.5`。
 - 运行时结构校验：Zod `4.4.3`；跨线程未知输入必须先解析，再进入业务逻辑。
 - 干净安装命令为 `pnpm install --frozen-lockfile`。
 - 格式检查命令为 `pnpm format:check`，修复当前工程文件格式使用 `pnpm format`。
 - 静态检查命令为 `pnpm lint`，严格类型检查命令为 `pnpm typecheck`。
-- 单元与物理集成测试命令为 `pnpm test`；它会直接运行固定 REBOUND WASM 的圆轨道、椭圆轨道和 1000 周期守恒测试。生产构建命令为 `pnpm build`。
+- 单元与物理集成测试命令为 `pnpm test`；它会直接运行固定 REBOUND WASM 的圆轨道、椭圆轨道和 1000 周期守恒测试，也会把固定 Collision WASM 与 TypeScript 参考结果逐字段对照。生产构建命令为 `pnpm build`。
 - 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测、生产构建和 Playwright 浏览器验收。首次在新环境运行前使用 `pnpm test:e2e:install` 安装 Chrome。
 - 浏览器验收也可单独运行 `pnpm test:e2e`。它覆盖非空画布像素、暂停、单步、倍率、恢复运行、手机抽屉和 WebGL2 真实回退。
 - 当前观测台性能采样命令为 `pnpm test:performance`。它构建生产包，通过短生命周期 Vite preview 覆盖桌面全景、桌面地球近景、桌面 WebGL2 地球近景和手机 WebGL2 地球近景；每个场景预热后采样三次、每次五秒，记录页面 RAF、实际场景帧、Worker state 和资源平台，完成后自动退出。
-- `pnpm build` 会检查生产包不含 source map，验证正式 physics Worker、轨道预览 Worker、唯一 REBOUND WASM、观测场景与 WebGPU/WebGL 渲染模块均已按需产出，并按 `artifact-lock.json` 校验 REBOUND 胶水源文件、原始 WASM 和发布 WASM。
+- Collision WASM 固定构建命令为 `pnpm build:collision-wasm`；它使用锁定容器生成唯一的 `crates/stary-collision/dist/stary_collision.wasm`。完整固定门禁为 `pnpm verify:collision-wasm`，包含容器重建、Rust release 测试、输入与产物哈希、导出白名单和 token 生命周期。仅检查当前锁定产物使用 `pnpm check:collision-wasm`。
+- `pnpm build` 会先运行 Collision WASM 当前产物门禁，再检查生产包不含 source map，并验证正式 physics Worker、轨道预览 Worker、观测场景与 WebGPU/WebGL 渲染模块均已按需产出。生产包必须恰好包含一个锁定 REBOUND WASM 和一个锁定 Collision WASM；正式 physics Worker 引用两者，轨道预览 Worker 只能引用 REBOUND。两个产物分别按各自 `artifact-lock.json` 校验字节数和 SHA-256。
 - 正式观测台通过 `useUniverseSimulation` 驱动 JPL J2000 太阳系 10 体 Worker 生命周期；画面优先使用 WebGPU，初始化失败时回退 WebGL2。天体 mesh 使用真实半径，屏幕空间定位环只负责可见性和选择。
 - REBOUND/WASM 隔离原型使用固定 Docker 镜像构建，命令为 `spikes/rebound-wasm/scripts/build.ps1`。
 - 原型测试命令为 `node --test spikes/rebound-wasm/tests/*.test.mjs`，数值报告命令为 `node spikes/rebound-wasm/scripts/run-acceptance.mjs`。
