@@ -275,6 +275,20 @@ async function waitForCameraTransition(
       );
       return { originBodyId: origin.bodyId, transitionActive: state.transitionActive };
     })
+    .toEqual({ originBodyId: expectedOriginBodyId, transitionActive: true });
+
+  await expect
+    .poll(async () => {
+      const state = await readJsonAttribute<{ readonly transitionActive: boolean }>(
+        canvas,
+        'data-visual-camera-state',
+      );
+      const origin = await readJsonAttribute<VisualOriginStateDiagnostic>(
+        canvas,
+        'data-visual-origin-state',
+      );
+      return { originBodyId: origin.bodyId, transitionActive: state.transitionActive };
+    })
     .toEqual({ originBodyId: expectedOriginBodyId, transitionActive: false });
 }
 
