@@ -1,12 +1,9 @@
-import { createHash } from "node:crypto";
-import { readFile, stat } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { createHash } from 'node:crypto';
+import { readFile, stat } from 'node:fs/promises';
+import path from 'node:path';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
-const EXPECTED_ARTIFACT_PATHS = Object.freeze([
-  "dist/rebound.mjs",
-  "dist/rebound.wasm",
-]);
+const EXPECTED_ARTIFACT_PATHS = Object.freeze(['dist/rebound.mjs', 'dist/rebound.wasm']);
 
 function normalizeHash(value) {
   return value.toUpperCase();
@@ -21,9 +18,11 @@ export async function verifyLockedFile({
   const filePath = path.resolve(baseDirectory, relativePath);
   const [contents, fileStats] = await Promise.all([readFile(filePath), stat(filePath)]);
   if (fileStats.size !== expectedBytes) {
-    throw new Error(`${relativePath} size mismatch: expected ${expectedBytes}, got ${fileStats.size}`);
+    throw new Error(
+      `${relativePath} size mismatch: expected ${expectedBytes}, got ${fileStats.size}`,
+    );
   }
-  const actualSha256 = createHash("sha256").update(contents).digest("hex").toUpperCase();
+  const actualSha256 = createHash('sha256').update(contents).digest('hex').toUpperCase();
   if (actualSha256 !== normalizeHash(expectedSha256)) {
     throw new Error(
       `${relativePath} SHA-256 mismatch: expected ${expectedSha256}, got ${actualSha256}`,
@@ -34,7 +33,7 @@ export async function verifyLockedFile({
 
 export function validateArtifactEntries(artifacts) {
   if (!Array.isArray(artifacts)) {
-    throw new Error("artifact-lock.json artifacts must be an array");
+    throw new Error('artifact-lock.json artifacts must be an array');
   }
   const actualPaths = artifacts.map((artifact) => artifact?.path).toSorted();
   const expectedPaths = [...EXPECTED_ARTIFACT_PATHS].toSorted();
@@ -42,26 +41,22 @@ export function validateArtifactEntries(artifacts) {
     actualPaths.length !== expectedPaths.length ||
     actualPaths.some((artifactPath, index) => artifactPath !== expectedPaths[index])
   ) {
-    throw new Error(
-      `artifact-lock.json must contain exactly: ${expectedPaths.join(", ")}`,
-    );
+    throw new Error(`artifact-lock.json must contain exactly: ${expectedPaths.join(', ')}`);
   }
 }
 
 async function verifyArtifactLock() {
-  const spikeRoot = fileURLToPath(new URL("../", import.meta.url));
+  const spikeRoot = fileURLToPath(new URL('../', import.meta.url));
   const artifactLock = JSON.parse(
-    await readFile(path.join(spikeRoot, "artifact-lock.json"), "utf8"),
+    await readFile(path.join(spikeRoot, 'artifact-lock.json'), 'utf8'),
   );
-  const sourceLock = JSON.parse(
-    await readFile(path.join(spikeRoot, "source-lock.json"), "utf8"),
-  );
+  const sourceLock = JSON.parse(await readFile(path.join(spikeRoot, 'source-lock.json'), 'utf8'));
   const patch = sourceLock.patches[0];
   const inputPairs = [
-    ["sourceCommit", sourceLock.commit],
-    ["sourceSha256", sourceLock.sha256],
-    ["patchSha256", patch.sha256],
-    ["buildImageDigest", sourceLock.buildImageDigest],
+    ['sourceCommit', sourceLock.commit],
+    ['sourceSha256', sourceLock.sha256],
+    ['patchSha256', patch.sha256],
+    ['buildImageDigest', sourceLock.buildImageDigest],
   ];
   for (const [name, actual] of inputPairs) {
     if (normalizeHash(String(artifactLock.inputs[name])) !== normalizeHash(String(actual))) {
@@ -75,6 +70,24 @@ async function verifyArtifactLock() {
     expectedBytes: (await stat(path.join(spikeRoot, patch.path))).size,
     expectedSha256: artifactLock.inputs.patchSha256,
   });
+  const localBuildInputs = [
+    ['bridgeSha256', 'src/rebound_bridge.c'],
+    ['contactSha256', 'src/rebound_contact.c'],
+    ['contactHeaderSha256', 'src/rebound_contact.h'],
+    ['buildScriptSha256', 'scripts/build-in-container.sh'],
+  ];
+  for (const [inputName, relativePath] of localBuildInputs) {
+    const expectedSha256 = artifactLock.inputs[inputName];
+    if (typeof expectedSha256 !== 'string' || !/^[A-F0-9]{64}$/i.test(expectedSha256)) {
+      throw new Error(`artifact-lock.json has invalid ${inputName}`);
+    }
+    await verifyLockedFile({
+      baseDirectory: spikeRoot,
+      relativePath,
+      expectedBytes: (await stat(path.join(spikeRoot, relativePath))).size,
+      expectedSha256,
+    });
+  }
   validateArtifactEntries(artifactLock.artifacts);
   for (const artifact of artifactLock.artifacts) {
     await verifyLockedFile({
@@ -84,7 +97,7 @@ async function verifyArtifactLock() {
       expectedSha256: artifact.sha256,
     });
   }
-  console.log("Artifact lock verified: patch, rebound.mjs, rebound.wasm.");
+  console.log('Artifact lock verified: sources, build script, rebound.mjs, rebound.wasm.');
 }
 
 const isMain =

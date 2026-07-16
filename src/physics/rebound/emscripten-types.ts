@@ -32,6 +32,17 @@ export interface ReboundEmscriptenModule {
   ): number;
   _stary_reb_move_to_com(handle: ReboundHandle): number;
   _stary_reb_integrate(handle: ReboundHandle, targetTimeSeconds: number): number;
+  _stary_reb_advance_until_event(handle: ReboundHandle, targetTimeSeconds: number): number;
+  _stary_reb_contact_count(handle: ReboundHandle): number;
+  _stary_reb_contact_time(handle: ReboundHandle): number;
+  _stary_reb_contact_particle_index(
+    handle: ReboundHandle,
+    pairIndex: number,
+    memberIndex: 0 | 1,
+  ): number;
+  _stary_reb_clear_contact(handle: ReboundHandle): number;
+  _stary_reb_discard_contact(handle: ReboundHandle): number;
+  _stary_reb_temporary_copy_count(handle: ReboundHandle): number;
   _stary_reb_particle_count(handle: ReboundHandle): number;
   _stary_reb_get_time(handle: ReboundHandle): number;
   _stary_reb_get_particle_value(

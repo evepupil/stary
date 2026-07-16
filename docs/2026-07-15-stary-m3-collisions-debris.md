@@ -14,9 +14,9 @@ M3 保持四条硬边界：
 ## 当前基础
 
 - M3 Task 1 已建立 `src/physics/collisions/`，包含来源锁、接触量、破坏标度、分类、材料、候选门禁和 event-total 守恒账本。
-- 正式协议为 v2，`BodyState` 只有 ID、质量、半径、位置和速度。
-- `PhysicsWorkerRuntime` 的单步和连续运行都直接调用 `integrateTo(targetTime)`，随后发送完整状态。
-- REBOUND C 桥已经提供创建、销毁、添加粒子、IAS15、推进、快照、能量和角动量导出。
+- M3 Task 2 已把正式协议与预览协议升级到 v3，`BodyState` 携带材料、自转、惯量和碰撞模型。
+- M3 Task 3 已交付事件式 REBOUND C 桥与 TypeScript 适配器；正式 `PhysicsWorkerRuntime` 仍在等待 Task 5 原子事务，因此当前运行循环继续调用 `integrateTo(targetTime)`。
+- REBOUND C 桥已经提供稳定 token 句柄、IAS15 推进、连续接触、同刻 pair、快照、能量和角动量导出。
 - `replaceBodies` 已具备候选实例、首帧校验、原子切换、修订冲突和失败回滚。
 - 轨道预览已经用扫掠线段识别有限采样间的碰撞风险。这条路径只负责预警，无法保证捕获 IAS15 步内的弯曲接触。
 - 仓库当前没有 Rust crate、Rust 工具链锁或正式碰撞 WASM。
@@ -179,7 +179,7 @@ advanceUntilEvent(targetTime)
 2. 对每一对天体计算真实步首、步尾相对位置的弦最小距离。安全半径额外膨胀 `A_rel_bound h^2 / 8 + epsDistance`；`A_rel_bound` 使用首次接触前的全局引力上界，局部加速只能在位移 enclosure 验证通过后替代它。
 3. 弦与曲率上界能证明无接触时接受该区间。无法证明时，从 checkpoint 回放到区间中点，递归检查左右区间。该判定覆盖弯曲路径，不能只看端点是否重叠。
 4. 穿透区间求最早的表面间隙零点；正切没有符号变化，使用带界的距离最小化确认。主 simulation 最终从 checkpoint 精确积分到最早接触时刻。
-5. 先收集时间容差内的候选 pair，再在接触快照补收距离容差内且正在接近或相切的 pair。C 只返回粒子下标，TypeScript 映射稳定 ID 并排序，不删除或合并粒子。
+5. 先收集根时间落在时间容差内的候选 pair，再补收最早接触快照中正在接近或相切的 pair。C 只返回粒子下标，TypeScript 映射稳定 ID 并排序，不删除或合并粒子。
 6. 任意错误都释放临时 copy 并回滚到子步前 checkpoint；接触集合溢出时明确失败，禁止静默截断。
 
 REBOUND 5.0.1 的 `LINE/LINETREE` 碰撞模式使用线性路径近似，只能作为参考，不能成为正式接触事实源。
@@ -265,13 +265,15 @@ v3 一次性升级以下公共结构：
 
 完成依据：正式协议与预览协议统一为 v3；controller、Worker、REBOUND、观测台状态、固定太阳系、创建、编辑、删除和预览链均已迁移。测试覆盖旧版本拒绝、精确回执、后台消息隔离、碰撞批次原子应用、旧帧清理和新增资料无损往返；完整门禁通过 57 个 Vitest 文件共 390 项测试、生产构建和 28 条 Playwright。
 
-### Task 3：交付 REBOUND 连续接触桥
+### Task 3：交付 REBOUND 连续接触桥（已完成）
 
 - 扩展固定 C 桥和 Emscripten 导出，提供事件式推进、接触读取和幂等清理。
 - 重新固定源码补丁、WASM 字节数和 SHA-256。
 - 覆盖高速穿透、正切、强弯曲近掠、初始重叠、同刻多接触、最早事件、checkpoint 回滚和尺度化容差。
 
 完成门槛：单步与连续运行共享同一 CCD；随机参考积分无漏检；接触时间与距离达到尺度化容差；无事件路径与旧 `integrateTo` 数值等价；全部 simulation copy 可证明释放。
+
+完成依据：固定 C 桥在一次原生 `reb_simulation_integrate()` 内通过 heartbeat 观察 IAS15 接受步。每段先验证 separation enclosure，再使用端点弦、曲率下界和径向变化上界；无法证明时从同一步首 checkpoint 左优先回放，达到深度、节点或 replay 预算会回滚并明确失败。穿透求真实表面间隙的最早零点，正切求径向速度零点；同刻集合保留根时间位于时间容差内的 pair，并补收最早快照中正在接近或相切的 pair。定向测试覆盖高速步中穿透、正切与近切两侧、强弯曲近掠、分离重叠被引力拉回、同刻与错峰接触、固定 seed 的 `2..10` 体真实引力 `200x` 细 REBOUND 参考、无事件逐值等价、4096/4097 pair 精确容量边界、非 IAS15 拒绝、重复清理和 stale handle。固定原型门禁通过 26 条 Node 测试与 1000 周期数值验收；项目门禁通过 58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright。正式 Worker 的单步与连续运行会在 Task 5 一次切换到该共享 API。
 
 ### Task 4：交付 Rust/WASM 碰撞内核
 

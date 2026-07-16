@@ -39,9 +39,11 @@ node spikes/rebound-wasm/scripts/static-server.mjs
 
 ## 目录说明
 
-- `src/rebound_bridge.c`：REBOUND 的最小 C 接口。
+- `src/rebound_bridge.c`：REBOUND 的稳定 token 句柄与最小导出接口。
+- `src/rebound_contact.c`：IAS15 checkpoint 回放、连续接触、同刻 pair 与资源预算。
+- `src/rebound_contact.h`：连续接触内部状态码和所有权契约。
 - `patches/`：固定上游版本的可审计源码补丁。
-- `artifact-lock.json`：固定构建输入与发布产物哈希。
+- `artifact-lock.json`：固定上游源码、补丁、本地 C 桥、构建脚本与发布产物哈希。
 - `scripts/static-server.mjs`：带固定 MIME 和安全路径限制的本机验收服务器。
 - `web/rebound-client.mjs`：面向 Worker 的 JavaScript 适配层。
 - `web/physics-worker.mjs`：静态浏览器验收 Worker。

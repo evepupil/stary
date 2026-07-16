@@ -68,6 +68,15 @@ function assertLockedWasm(label, content, lockedArtifact) {
   }
 }
 
+function assertLockedHash(label, content, expectedSha256) {
+  if (typeof expectedSha256 !== 'string' || !/^[A-F0-9]{64}$/.test(expectedSha256)) {
+    throw new Error(`${label} 的锁定 SHA-256 无效`);
+  }
+  if (sha256(content) !== expectedSha256) {
+    throw new Error(`${label} SHA-256 与 artifact-lock.json 不一致`);
+  }
+}
+
 function readPlanetaryAssets(manifest) {
   if (manifest?.schemaVersion !== 1 || !Array.isArray(manifest.assets)) {
     throw new Error('planetary-assets.json 结构无效');
@@ -164,6 +173,16 @@ const sourceWasmPath = path.join(reboundSpikeDirectory, ...lockedWasmPath.split(
 const sourceGluePath = path.join(reboundSpikeDirectory, ...lockedGluePath.split('/'));
 const sourceGlue = await readFile(sourceGluePath);
 const sourceWasm = await readFile(sourceWasmPath);
+const localBuildInputs = [
+  ['REBOUND bridge C 源码', 'src/rebound_bridge.c', 'bridgeSha256'],
+  ['REBOUND continuous contact C 源码', 'src/rebound_contact.c', 'contactSha256'],
+  ['REBOUND continuous contact C 头文件', 'src/rebound_contact.h', 'contactHeaderSha256'],
+  ['REBOUND 固定构建脚本', 'scripts/build-in-container.sh', 'buildScriptSha256'],
+];
+for (const [label, relativePath, inputName] of localBuildInputs) {
+  const content = await readFile(path.join(reboundSpikeDirectory, ...relativePath.split('/')));
+  assertLockedHash(label, content, artifactLock.inputs?.[inputName]);
+}
 const builtWasm = await readFile(path.join(distDirectory, wasmFiles[0]));
 const builtWorker = await readFile(path.join(distDirectory, workerFiles[0]), 'utf8');
 const builtOrbitPreviewWorker = await readFile(
@@ -173,7 +192,12 @@ const builtOrbitPreviewWorker = await readFile(
 assertLockedWasm('正式层使用的 REBOUND 胶水模块', sourceGlue, lockedGlueArtifact);
 assertLockedWasm('原型 REBOUND WASM', sourceWasm, lockedWasmArtifact);
 assertLockedWasm('生产 REBOUND WASM', builtWasm, lockedWasmArtifact);
-if (!builtWorker.includes('_stary_reb_create') || !builtWorker.includes('_stary_reb_integrate')) {
+if (
+  !builtWorker.includes('_stary_reb_create') ||
+  !builtWorker.includes('_stary_reb_integrate') ||
+  !builtWorker.includes('_stary_reb_advance_until_event') ||
+  !builtWorker.includes('_stary_reb_discard_contact')
+) {
   throw new Error('正式物理 Worker 没有包含锁定 REBOUND 胶水模块的关键导出');
 }
 const builtWasmFileName = path.posix.basename(wasmFiles[0]);
@@ -186,6 +210,8 @@ if (!builtOrbitPreviewWorker.includes(builtWasmFileName)) {
 const orbitPreviewWorkerMarkers = [
   '_stary_reb_create',
   '_stary_reb_integrate',
+  '_stary_reb_advance_until_event',
+  '_stary_reb_discard_contact',
   'trajectoryPreviewRequest',
   'trajectoryPreviewResult',
   'trajectoryPreviewError',

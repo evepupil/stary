@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M2 真实画面已通过验收。M3 Task 1 与 Task 2 已完成科学模型底座、协议 v3 和场景物理资料升级，下一步执行 Task 3 的 REBOUND 连续接触桥。
+M2 真实画面已通过验收。M3 Task 1 到 Task 3 已完成科学模型底座、协议 v3、场景物理资料和 REBOUND 连续接触桥，下一步执行 Task 4 的 Rust/WASM 碰撞内核。
 
 ## Milestones
 
@@ -41,11 +41,12 @@ M2 真实画面已通过验收。M3 Task 1 与 Task 2 已完成科学模型底�
 - M3 规划：已完成。采用 EDACM 主模型、Genda 合并线和分层材料；连续接触留在 REBOUND C 桥，Rust/WASM 生成候选结果，TypeScript 通过守恒门禁后原子切换。
 - M3 Task 1：已完成。交付来源锁、接触量、EDACM/Genda 公式、材料剥离、确定性 seed、event-total 守恒账本、候选全链复算和原始输入绑定；6 个测试文件共 41 项定向测试通过。
 - M3 Task 2：已完成。正式协议与预览协议升级到 v3，增加精确回执、完整物理状态、碰撞批次与双层诊断；太阳系和六类创建预设补齐材料、自转、惯量及碰撞模型。完整门禁通过 57 个 Vitest 文件共 390 项测试、生产构建和 28 条 Playwright。
+- M3 Task 3：已完成。固定 REBOUND C 桥交付 IAS15 连续接触、checkpoint 回放、最早时刻、同刻 pair、幂等确认和 token 句柄；26 条原型测试、58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright 全部通过。
 
 ## Next Recommended Steps
 
-1. 执行 M3 Task 3，扩展 REBOUND C 桥，交付最早连续接触、同刻接触集合、checkpoint 回放和资源释放证据。
-2. 随后交付 Rust/WASM 碰撞内核和正式 Worker 原子碰撞事务。
+1. 执行 M3 Task 4，交付固定 Rust/WASM 碰撞内核、跨语言黄金值、内存所有权和产物锁。
+2. 随后把连续接触与 Rust 候选接入正式 Worker 原子碰撞事务。
 
 ## Inbox
 
@@ -125,3 +126,4 @@ M2 真实画面已通过验收。M3 Task 1 与 Task 2 已完成科学模型底�
 - 2026-07-15：完成 M3 实施规划；锁定科学来源、模型范围、连续接触、Rust/WASM 边界、协议 v3、守恒门槛和七任务拆分，下一步进入 Task 1。
 - 2026-07-16：完成 M3 Task 1；交付碰撞纯函数、严格候选门禁、材料剥离、event-total 守恒账本和跨语言黄金样例，下一步进入 Task 2。
 - 2026-07-16：完成 M3 Task 2；正式与预览协议升级到 v3，太阳系和创建预设补齐碰撞资料，下一步进入 Task 3 连续接触桥。
+- 2026-07-16：完成 M3 Task 3；交付 REBOUND 连续接触、最早接触时刻、同刻 pair、checkpoint 回滚、资源预算和固定产物锁，下一步进入 Task 4 Rust/WASM 碰撞内核。

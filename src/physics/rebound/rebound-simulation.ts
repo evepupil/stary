@@ -1,6 +1,7 @@
 import createReboundModule from '../../../spikes/rebound-wasm/dist/rebound.mjs';
 
 import { REBOUND_WASM_URL } from '../../platform/wasm/rebound-asset';
+import { compareUtf8 } from '../collisions/stable-order';
 import { GRAVITATIONAL_CONSTANT_SI } from '../constants';
 import {
   bodyStatesSchema,
@@ -52,11 +53,33 @@ export interface ReboundSnapshot {
   readonly diagnostics: PhysicsDiagnostics;
 }
 
+export interface ReboundContactPair {
+  readonly firstBodyId: string;
+  readonly secondBodyId: string;
+}
+
+export type ReboundAdvanceResult =
+  | {
+      readonly type: 'advanced';
+      readonly timeSeconds: number;
+    }
+  | {
+      readonly type: 'contact';
+      readonly timeSeconds: number;
+      readonly pairs: readonly ReboundContactPair[];
+      readonly snapshot: ReboundSnapshot;
+    };
+
 export interface ReboundSimulation {
   readonly timeSeconds: number;
   integrateTo(targetTimeSeconds: number): void;
   snapshot(): ReboundSnapshot;
   destroy(): void;
+}
+
+export interface ReboundEventSimulation extends ReboundSimulation {
+  advanceUntilEvent(targetTimeSeconds: number): ReboundAdvanceResult;
+  clearPendingContact(): void;
 }
 
 function finiteNumber(label: string, value: number): number {
@@ -177,6 +200,96 @@ class ReboundSimulationAdapter implements ReboundSimulation {
     void this.timeSeconds;
   }
 
+  public advanceUntilEvent(targetTimeSeconds: number): ReboundAdvanceResult {
+    const currentTimeSeconds = this.timeSeconds;
+    nonNegativeFiniteNumber('targetTimeSeconds', targetTimeSeconds);
+    if (targetTimeSeconds < currentTimeSeconds) {
+      throw new Error(
+        `targetTimeSeconds 不能早于当前模拟时间 ${String(currentTimeSeconds)}，实际为 ${String(targetTimeSeconds)}`,
+      );
+    }
+
+    const handle = this.requireHandle();
+    const localTargetTimeSeconds = finiteNumber(
+      'localTargetTimeSeconds',
+      targetTimeSeconds - this.timeOriginSeconds,
+    );
+    const status = this.module._stary_reb_advance_until_event(handle, localTargetTimeSeconds);
+    this.assertTemporaryCopiesReleased(handle);
+    if (status === 0) {
+      const timeSeconds = this.timeSeconds;
+      if (timeSeconds !== targetTimeSeconds) {
+        throw new Error(
+          `REBOUND 无事件推进未到达目标时间：预期 ${String(targetTimeSeconds)}，实际 ${String(timeSeconds)}`,
+        );
+      }
+      return { type: 'advanced', timeSeconds };
+    }
+    if (status !== 1) {
+      throw new Error(`advanceUntilEvent 失败，REBOUND 状态码为 ${String(status)}`);
+    }
+
+    try {
+      const localContactTimeSeconds = nonNegativeFiniteNumber(
+        'REBOUND local contact time',
+        this.module._stary_reb_contact_time(handle),
+      );
+      const timeSeconds = finiteNumber(
+        'REBOUND contact time',
+        this.timeOriginSeconds + localContactTimeSeconds,
+      );
+      if (timeSeconds < currentTimeSeconds || timeSeconds > targetTimeSeconds) {
+        throw new Error(
+          `REBOUND 接触时间越界：${String(timeSeconds)} 不在 ${String(currentTimeSeconds)} 到 ${String(targetTimeSeconds)} 内`,
+        );
+      }
+      const pairCount = this.module._stary_reb_contact_count(handle);
+      if (!Number.isSafeInteger(pairCount) || pairCount <= 0) {
+        throw new Error(`REBOUND 接触 pair 数量异常：${String(pairCount)}`);
+      }
+      const seenPairs = new Set<string>();
+      const pairs: ReboundContactPair[] = [];
+      for (let pairIndex = 0; pairIndex < pairCount; pairIndex += 1) {
+        const firstParticleIndex = this.readContactParticleIndex(handle, pairIndex, 0);
+        const secondParticleIndex = this.readContactParticleIndex(handle, pairIndex, 1);
+        if (firstParticleIndex >= secondParticleIndex) {
+          throw new Error(
+            `REBOUND 接触 pair 顺序异常：${String(firstParticleIndex)}, ${String(secondParticleIndex)}`,
+          );
+        }
+        const firstId = this.bodyMetadata[firstParticleIndex]?.id;
+        const secondId = this.bodyMetadata[secondParticleIndex]?.id;
+        if (firstId === undefined || secondId === undefined) {
+          throw new Error(`REBOUND 接触 pair 引用了不存在的粒子：${String(pairIndex)}`);
+        }
+        const [firstBodyId, secondBodyId] =
+          compareUtf8(firstId, secondId) < 0 ? [firstId, secondId] : [secondId, firstId];
+        const pairKey = `${String(firstParticleIndex)}:${String(secondParticleIndex)}`;
+        if (seenPairs.has(pairKey)) {
+          throw new Error(`REBOUND 接触 pair 重复：${pairKey}`);
+        }
+        seenPairs.add(pairKey);
+        pairs.push({ firstBodyId, secondBodyId });
+      }
+      pairs.sort((left, right) => {
+        const firstOrder = compareUtf8(left.firstBodyId, right.firstBodyId);
+        return firstOrder !== 0 ? firstOrder : compareUtf8(left.secondBodyId, right.secondBodyId);
+      });
+      const snapshot = this.snapshot();
+      if (this.timeSeconds !== timeSeconds) {
+        throw new Error('REBOUND 接触快照时间与事件时间不一致');
+      }
+      return { type: 'contact', timeSeconds, pairs, snapshot };
+    } catch (error) {
+      this.module._stary_reb_discard_contact(handle);
+      throw error;
+    }
+  }
+
+  public clearPendingContact(): void {
+    checkStatus('clearPendingContact', this.module._stary_reb_clear_contact(this.requireHandle()));
+  }
+
   public snapshot(): ReboundSnapshot {
     const handle = this.requireHandle();
     const count = this.module._stary_reb_particle_count(handle);
@@ -208,6 +321,35 @@ class ReboundSimulationAdapter implements ReboundSimulation {
       throw new Error('REBOUND simulation 已销毁');
     }
     return this.handle;
+  }
+
+  private assertTemporaryCopiesReleased(handle: ReboundHandle): void {
+    const count = this.module._stary_reb_temporary_copy_count(handle);
+    if (count !== 0) {
+      throw new Error(`REBOUND 临时 simulation copy 未释放：${String(count)}`);
+    }
+  }
+
+  private readContactParticleIndex(
+    handle: ReboundHandle,
+    pairIndex: number,
+    memberIndex: 0 | 1,
+  ): number {
+    const particleIndex = this.module._stary_reb_contact_particle_index(
+      handle,
+      pairIndex,
+      memberIndex,
+    );
+    if (
+      !Number.isSafeInteger(particleIndex) ||
+      particleIndex < 0 ||
+      particleIndex >= this.bodyMetadata.length
+    ) {
+      throw new Error(
+        `REBOUND 接触粒子下标异常：pair ${String(pairIndex)} member ${String(memberIndex)} = ${String(particleIndex)}`,
+      );
+    }
+    return particleIndex;
   }
 
   private readBody(handle: ReboundHandle, particleIndex: number, metadata: BodyState): BodyState {
@@ -292,7 +434,7 @@ class ReboundSimulationAdapter implements ReboundSimulation {
 export async function createReboundSimulation(
   bodies: readonly BodyState[],
   options: CreateReboundSimulationOptions = {},
-): Promise<ReboundSimulation> {
+): Promise<ReboundEventSimulation> {
   const validatedBodies = validateBodies(bodies);
   const gravitationalConstant = positiveFiniteNumber(
     'gravitationalConstant',
