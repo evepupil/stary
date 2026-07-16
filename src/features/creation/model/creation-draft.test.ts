@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { ASTRONOMICAL_UNIT_METERS } from '../../../physics/constants';
-import { MAX_MAJOR_BODY_COUNT, type BodyState } from '../../../physics/protocol/schemas';
+import {
+  bodyStateSchema,
+  MAX_MAJOR_BODY_COUNT,
+  type BodyState,
+} from '../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import {
   buildCreationDraft,
   CREATION_PRESETS,
@@ -13,13 +18,11 @@ import {
 import { captureCreationSnapshot } from './creation-draft';
 
 function body(id: string, massKg: number, x: number): BodyState {
-  return {
+  return createTestBodyState({
     id,
     massKg,
-    radiusMeters: 1,
     positionMeters: { x, y: 0, z: 0 },
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  };
+  });
 }
 
 const placement = {
@@ -39,9 +42,17 @@ describe('creation draft', () => {
       return;
     }
     sourceBody.positionMeters.x = 42;
+    sourceBody.spinAngularMomentumKgMetersSquaredPerSecond.z = 42;
+    const sourceLayer = sourceBody.materialLayers[0];
+    if (sourceLayer === undefined) {
+      throw new Error('测试天体缺少材料层');
+    }
+    sourceLayer.massFraction = 0.5;
 
     expect(snapshot).toMatchObject({ bodyRevision: 3, simulationTimeSeconds: 120 });
     expect(snapshot.bodies[0]?.positionMeters.x).toBe(0);
+    expect(snapshot.bodies[0]?.spinAngularMomentumKgMetersSquaredPerSecond.z).toBe(0);
+    expect(snapshot.bodies[0]?.materialLayers[0]?.massFraction).toBe(1);
     expect(() => captureCreationSnapshot(source, 3, 119, 120)).toThrow('尚未追上');
   });
 
@@ -54,6 +65,90 @@ describe('creation draft', () => {
     expect(drafts).toHaveLength(6);
     expect(drafts.at(-1)?.bodies).toHaveLength(6);
     expect(new Set(drafts.flatMap((draft) => draft.bodies.map((entry) => entry.id))).size).toBe(11);
+    drafts
+      .flatMap((draft) => draft.bodies)
+      .forEach((entry) => {
+        expect(() => bodyStateSchema.parse(entry)).not.toThrow();
+      });
+    expect(drafts.map((draft) => draft.bodies[0]?.collisionModel)).toEqual([
+      'stellar',
+      'gravitySolid',
+      'gravityFluid',
+      'gravitySolid',
+      'blackHole',
+      'gravitySolid',
+    ]);
+    expect(drafts[4]?.bodies[0]).toMatchObject({
+      collisionModel: 'blackHole',
+      materialLayers: [],
+      momentOfInertiaFactor: null,
+    });
+    expect(drafts[0]?.bodies[0]?.spinAngularMomentumKgMetersSquaredPerSecond.z).toBeGreaterThan(0);
+    const asteroids = drafts[5]?.bodies ?? [];
+    expect(
+      asteroids.every((entry) => entry.materialLayers !== drafts[5]?.preset.materialLayers),
+    ).toBe(true);
+    for (let index = 1; index < asteroids.length; index += 1) {
+      expect(asteroids[index]?.materialLayers).not.toBe(asteroids[0]?.materialLayers);
+      expect(asteroids[index]?.materialLayers[0]).not.toBe(asteroids[0]?.materialLayers[0]);
+      expect(asteroids[index]?.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+        asteroids[0]?.spinAngularMomentumKgMetersSquaredPerSecond,
+      );
+    }
+    expect(
+      CREATION_PRESETS.map((preset) => ({
+        id: preset.id,
+        collisionModel: preset.collisionModel,
+        momentOfInertiaFactor: preset.momentOfInertiaFactor,
+        materials: preset.materialLayers.map((layer) => [layer.material, layer.massFraction]),
+      })),
+    ).toEqual([
+      {
+        id: 'star',
+        collisionModel: 'stellar',
+        momentOfInertiaFactor: 0.07,
+        materials: [['gas', 1]],
+      },
+      {
+        id: 'rocky-planet',
+        collisionModel: 'gravitySolid',
+        momentOfInertiaFactor: 0.3307,
+        materials: [
+          ['silicate', 0.675],
+          ['iron', 0.325],
+        ],
+      },
+      {
+        id: 'gas-giant',
+        collisionModel: 'gravityFluid',
+        momentOfInertiaFactor: 0.254,
+        materials: [
+          ['gas', 0.9],
+          ['ice', 0.06],
+          ['silicate', 0.03],
+          ['iron', 0.01],
+        ],
+      },
+      {
+        id: 'moon',
+        collisionModel: 'gravitySolid',
+        momentOfInertiaFactor: 0.393,
+        materials: [
+          ['silicate', 0.98],
+          ['iron', 0.02],
+        ],
+      },
+      { id: 'black-hole', collisionModel: 'blackHole', momentOfInertiaFactor: null, materials: [] },
+      {
+        id: 'asteroid-cluster',
+        collisionModel: 'gravitySolid',
+        momentOfInertiaFactor: 0.4,
+        materials: [
+          ['silicate', 0.8],
+          ['iron', 0.2],
+        ],
+      },
+    ]);
     expect(parseCreatedBodyId('created-gas-giant-03')).toEqual({
       memberIndex: null,
       ordinal: 3,

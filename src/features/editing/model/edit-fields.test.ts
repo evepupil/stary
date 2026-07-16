@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { ASTRONOMICAL_UNIT_METERS } from '../../../physics/constants';
-import type { BodyState } from '../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import {
   bodyStateToEditFields,
   parseBodyEditFields,
@@ -9,13 +9,19 @@ import {
   type BodyEditFields,
 } from './edit-fields';
 
-const earth: BodyState = {
+const earth = createTestBodyState({
   id: 'earth',
   massKg: 5.972_2e24,
   radiusMeters: 6_371_000,
   positionMeters: { x: ASTRONOMICAL_UNIT_METERS, y: -0.5 * ASTRONOMICAL_UNIT_METERS, z: 0 },
   velocityMetersPerSecond: { x: 1_000, y: 29_780, z: -500 },
-};
+  spinAngularMomentumKgMetersSquaredPerSecond: { x: 1, y: 2, z: 3 },
+  momentOfInertiaFactor: 0.3307,
+  materialLayers: [
+    { material: 'silicate', massFraction: 0.675 },
+    { material: 'iron', massFraction: 0.325 },
+  ],
+});
 
 describe('body edit fields', () => {
   it('按字段路径更新嵌套输入且保留其他值', () => {
@@ -45,7 +51,9 @@ describe('body edit fields', () => {
       velocityKmPerSecond: { x: '0', y: '30.5', z: '-1e-2' },
     };
 
-    expect(parseBodyEditFields(earth, fields)).toEqual({
+    const result = parseBodyEditFields(earth, fields);
+
+    expect(result).toMatchObject({
       success: true,
       body: {
         id: 'earth',
@@ -57,8 +65,21 @@ describe('body edit fields', () => {
           z: 0.002 * ASTRONOMICAL_UNIT_METERS,
         },
         velocityMetersPerSecond: { x: 0, y: 30_500, z: -10 },
+        spinAngularMomentumKgMetersSquaredPerSecond:
+          earth.spinAngularMomentumKgMetersSquaredPerSecond,
+        momentOfInertiaFactor: earth.momentOfInertiaFactor,
+        materialLayers: earth.materialLayers,
+        collisionModel: earth.collisionModel,
       },
     });
+    if (!result.success) {
+      throw new Error('合法编辑字段应解析成功');
+    }
+    expect(result.body.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+      earth.spinAngularMomentumKgMetersSquaredPerSecond,
+    );
+    expect(result.body.materialLayers).not.toBe(earth.materialLayers);
+    expect(result.body.materialLayers[0]).not.toBe(earth.materialLayers[0]);
   });
 
   it('未修改的格式化字段可以完整还原原天体', () => {

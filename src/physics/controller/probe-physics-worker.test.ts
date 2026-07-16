@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { parseWorkerToMainMessage } from '../protocol/parse-message';
+import { createPhysicsStateFromSnapshot } from '../protocol/physics-state';
 import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
 import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
+import { createTestCollisionBatchMessage } from '../../features/observatory/simulation/test-helpers';
 import { PhysicsWorkerController, type PhysicsWorkerTarget } from './physics-worker-controller';
 import { PHYSICS_PROBE_STEP_SECONDS, probePhysicsWorker } from './probe-physics-worker';
 
@@ -10,12 +12,15 @@ type FakeWorkerMode =
   | 'error'
   | 'manualStatus'
   | 'manualReplacementError'
+  | 'manualStep'
   | 'messageerror'
   | 'protocolError'
   | 'replacementError'
   | 'silent'
   | 'success';
 type WorkerControllerEventType = 'error' | 'message' | 'messageerror';
+type FakeWorkerResponsePayload<Message extends WorkerToMainMessage = WorkerToMainMessage> =
+  Message extends WorkerToMainMessage ? Omit<Message, 'version' | 'sessionId' | 'sequence'> : never;
 
 const diagnostics = {
   totalEnergyJoules: -1,
@@ -29,6 +34,10 @@ const testBody: BodyState = {
   radiusMeters: 0,
   positionMeters: { x: 0, y: 0, z: 0 },
   velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
+  spinAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
+  momentOfInertiaFactor: 0.4,
+  materialLayers: [{ material: 'silicate', massFraction: 1 }],
+  collisionModel: 'gravitySolid',
 };
 
 class FakePhysicsWorker implements PhysicsWorkerTarget {
@@ -67,7 +76,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
         code: 'initializationFailed',
         message: 'WASM 初始化失败',
         recoverable: false,
-        requestSequence: message.sequence,
+        replyToSequence: message.sequence,
         simulationTimeSeconds: 0,
       });
       return;
@@ -76,42 +85,60 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
     switch (message.type) {
       case 'initialize':
         this.#currentBodies = [...message.bodies];
-        this.respond({ type: 'ready', simulationTimeSeconds: 0, bodyRevision: 0 });
+        this.respond({
+          type: 'ready',
+          simulationTimeSeconds: 0,
+          replyToSequence: message.sequence,
+          bodyRevision: 0,
+        });
         break;
       case 'step':
+        if (this.mode === 'manualStep') {
+          break;
+        }
         this.#simulationTimeSeconds = message.simulationTimeSeconds + message.stepSeconds;
         this.respond({
           type: 'state',
           simulationTimeSeconds: this.#simulationTimeSeconds,
+          replyToSequence: message.sequence,
           bodyRevision: this.#bodyRevision,
-          bodies: this.#currentBodies,
-          diagnostics,
+          requestedTargetSimulationTimeSeconds: this.#simulationTimeSeconds,
+          state: createPhysicsStateFromSnapshot({ bodies: this.#currentBodies, diagnostics }),
         });
         break;
       case 'dispose':
-        this.respond({ type: 'disposed', simulationTimeSeconds: message.simulationTimeSeconds });
+        this.respond({
+          type: 'disposed',
+          simulationTimeSeconds: message.simulationTimeSeconds,
+          replyToSequence: message.sequence,
+        });
         break;
       case 'start':
         this.respond({
           type: 'status',
           simulationTimeSeconds: message.simulationTimeSeconds,
+          replyToSequence: message.sequence,
           runState: 'running',
           timeScale: 1,
         });
         break;
       case 'pause':
-        this.respond({
-          type: 'status',
-          simulationTimeSeconds: message.simulationTimeSeconds,
-          runState: 'paused',
-          timeScale: 1,
-        });
+        if (this.mode !== 'manualStatus') {
+          this.respond({
+            type: 'status',
+            simulationTimeSeconds: message.simulationTimeSeconds,
+            replyToSequence: message.sequence,
+            runState: 'paused',
+            timeScale: 1,
+          });
+        }
         break;
       case 'setTimeScale':
         if (this.mode !== 'manualStatus' && this.mode !== 'manualReplacementError') {
           this.respond({
             type: 'status',
             simulationTimeSeconds: message.simulationTimeSeconds,
+            replyToSequence: message.sequence,
             runState: 'paused',
             timeScale: message.timeScale,
           });
@@ -124,7 +151,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
             code: 'bodyRevisionConflict',
             message: '修订冲突',
             recoverable: true,
-            requestSequence: message.sequence,
+            replyToSequence: message.sequence,
             simulationTimeSeconds: message.simulationTimeSeconds,
           });
           break;
@@ -135,7 +162,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
             code: 'bodySnapshotConflict',
             message: '快照时间冲突',
             recoverable: true,
-            requestSequence: message.sequence,
+            replyToSequence: message.sequence,
             simulationTimeSeconds: this.#simulationTimeSeconds,
           });
           break;
@@ -149,7 +176,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
             code: 'bodyReplacementFailed',
             message: '替换失败',
             recoverable: true,
-            requestSequence: message.sequence,
+            replyToSequence: message.sequence,
             simulationTimeSeconds: message.simulationTimeSeconds,
           });
           break;
@@ -159,9 +186,9 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
         this.respond({
           type: 'bodiesReplaced',
           simulationTimeSeconds: message.simulationTimeSeconds,
+          replyToSequence: message.sequence,
           bodyRevision: this.#bodyRevision,
-          bodies: this.#currentBodies,
-          diagnostics,
+          state: createPhysicsStateFromSnapshot({ bodies: this.#currentBodies, diagnostics }),
         });
         break;
     }
@@ -179,11 +206,16 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
     return [...this.listeners.values()].reduce((total, listeners) => total + listeners.size, 0);
   }
 
-  sendStatus(timeScale: number): void {
+  sendStatus(
+    timeScale: number,
+    replyToSequence: number | null = null,
+    runState: 'paused' | 'running' = 'running',
+  ): void {
     this.respond({
       type: 'status',
       simulationTimeSeconds: this.#simulationTimeSeconds,
-      runState: 'running',
+      replyToSequence,
+      runState,
       timeScale,
     });
   }
@@ -198,7 +230,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
       code: 'bodyReplacementFailed',
       message: '替换失败',
       recoverable: true,
-      requestSequence: replacement?.sequence ?? null,
+      replyToSequence: replacement?.sequence ?? null,
       simulationTimeSeconds: this.#simulationTimeSeconds,
     });
   }
@@ -209,9 +241,33 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
       code: 'invalidCommand',
       message: '无法关联的外部消息',
       recoverable: true,
-      requestSequence: null,
+      replyToSequence: null,
       simulationTimeSeconds: this.#simulationTimeSeconds,
     });
+  }
+
+  sendBackgroundState(bodyRevision: number): void {
+    this.respond({
+      type: 'state',
+      simulationTimeSeconds: this.#simulationTimeSeconds,
+      replyToSequence: null,
+      bodyRevision,
+      requestedTargetSimulationTimeSeconds: this.#simulationTimeSeconds,
+      state: createPhysicsStateFromSnapshot({ bodies: this.#currentBodies, diagnostics }),
+    });
+  }
+
+  sendCollisionBatch(replyToSequence: number, requestedTargetSimulationTimeSeconds: number): void {
+    const batch = createTestCollisionBatchMessage({
+      contactTimeSeconds: requestedTargetSimulationTimeSeconds - 1,
+      replyToSequence,
+      requestedTargetSimulationTimeSeconds,
+    });
+    const { sequence: _sequence, sessionId: _sessionId, version: _version, ...payload } = batch;
+    void _sequence;
+    void _sessionId;
+    void _version;
+    this.respond(payload);
   }
 
   private emit(type: WorkerControllerEventType, event: Event): void {
@@ -220,46 +276,7 @@ class FakePhysicsWorker implements PhysicsWorkerTarget {
     });
   }
 
-  private respond(
-    payload:
-      | {
-          readonly bodyRevision: 0;
-          readonly simulationTimeSeconds: number;
-          readonly type: 'ready';
-        }
-      | { readonly simulationTimeSeconds: number; readonly type: 'disposed' }
-      | {
-          readonly bodyRevision: number;
-          readonly bodies: Extract<WorkerToMainMessage, { type: 'state' }>['bodies'];
-          readonly diagnostics: Extract<WorkerToMainMessage, { type: 'state' }>['diagnostics'];
-          readonly simulationTimeSeconds: number;
-          readonly type: 'state';
-        }
-      | {
-          readonly bodyRevision: number;
-          readonly bodies: Extract<WorkerToMainMessage, { type: 'bodiesReplaced' }>['bodies'];
-          readonly diagnostics: Extract<
-            WorkerToMainMessage,
-            { type: 'bodiesReplaced' }
-          >['diagnostics'];
-          readonly simulationTimeSeconds: number;
-          readonly type: 'bodiesReplaced';
-        }
-      | {
-          readonly runState: Extract<WorkerToMainMessage, { type: 'status' }>['runState'];
-          readonly simulationTimeSeconds: number;
-          readonly timeScale: number;
-          readonly type: 'status';
-        }
-      | {
-          readonly code: Extract<WorkerToMainMessage, { type: 'error' }>['code'];
-          readonly message: string;
-          readonly recoverable: boolean;
-          readonly requestSequence: number | null;
-          readonly simulationTimeSeconds: number;
-          readonly type: 'error';
-        },
-  ): void {
+  private respond(payload: FakeWorkerResponsePayload): void {
     const sessionId = this.postedMessages[0]?.sessionId ?? 'probe-session';
     const message = parseWorkerToMainMessage({
       version: PHYSICS_PROTOCOL_VERSION,
@@ -411,21 +428,64 @@ describe('PhysicsWorkerController', () => {
     controller.close();
   });
 
-  it('订阅主动降速 status，待决倍率请求只由各自目标值完成', async () => {
+  it('后台 state 不能跳过未见过的天体修订号', async () => {
+    const worker = new FakePhysicsWorker('success');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'revision-session',
+    });
+    await controller.initialize([testBody]);
+    const fatal = vi.fn();
+    controller.subscribeFatal(fatal);
+
+    worker.sendBackgroundState(1);
+
+    expect(fatal).toHaveBeenCalledOnce();
+    expect(fatal.mock.calls[0]?.[0]).toMatchObject({
+      message: 'Physics Worker state 的天体修订号与当前状态不一致',
+    });
+    expect(worker.terminated).toBe(true);
+  });
+
+  it('step 遇到提前碰撞时由同请求序号的批次正常完成', async () => {
+    const worker = new FakePhysicsWorker('manualStep');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'collision-session',
+    });
+    await controller.initialize([
+      { ...testBody, id: 'first-parent' },
+      { ...testBody, id: 'second-parent' },
+    ]);
+
+    const advance = controller.step(10);
+    const stepCommand = worker.postedMessages.findLast(
+      (message): message is Extract<MainToWorkerMessage, { type: 'step' }> =>
+        message.type === 'step',
+    );
+    if (stepCommand === undefined) {
+      throw new Error('测试缺少 step 命令');
+    }
+    worker.sendCollisionBatch(stepCommand.sequence, 10);
+
+    await expect(advance).resolves.toMatchObject({
+      type: 'collisionBatchResolved',
+      replyToSequence: stepCommand.sequence,
+      requestedTargetSimulationTimeSeconds: 10,
+      contactTimeSeconds: 9,
+      bodyRevisionAfter: 1,
+    });
+    expect(controller.bodyRevision).toBe(1);
+    controller.close();
+  });
+
+  it('后台 status 不完成待决倍率请求，命令回执按 replyToSequence 精确配对', async () => {
     const worker = new FakePhysicsWorker('manualStatus');
     const controller = new PhysicsWorkerController({
       createWorker: () => worker,
       sessionId: 'probe-session',
     });
-    await controller.initialize([
-      {
-        id: 'body',
-        massKg: 1,
-        radiusMeters: 0,
-        positionMeters: { x: 0, y: 0, z: 0 },
-        velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-      },
-    ]);
+    await controller.initialize([testBody]);
     const receivedTimeScales: number[] = [];
     const unsubscribe = controller.subscribe((message) => {
       if (message.type === 'status') {
@@ -440,6 +500,11 @@ describe('PhysicsWorkerController', () => {
     const second = controller.setTimeScale(2_000).then(() => {
       secondResolved = true;
     });
+    const timeScaleCommands = worker.postedMessages.filter(
+      (message): message is Extract<MainToWorkerMessage, { type: 'setTimeScale' }> =>
+        message.type === 'setTimeScale',
+    );
+    expect(timeScaleCommands).toHaveLength(2);
 
     worker.sendStatus(500);
     await Promise.resolve();
@@ -448,17 +513,60 @@ describe('PhysicsWorkerController', () => {
     expect(firstResolved).toBe(false);
     expect(secondResolved).toBe(false);
 
-    worker.sendStatus(1_000);
+    worker.sendStatus(1_000, timeScaleCommands[0]?.sequence ?? null);
     await first;
     expect(firstResolved).toBe(true);
     expect(secondResolved).toBe(false);
 
-    worker.sendStatus(2_000);
+    worker.sendStatus(2_000, timeScaleCommands[1]?.sequence ?? null);
     await second;
     expect(secondResolved).toBe(true);
     expect(receivedTimeScales).toEqual([500, 1_000, 2_000]);
 
     unsubscribe();
+    controller.close();
+  });
+
+  it('pause 与 setTimeScale 只能由自己的回执完成，后台中间帧保持待决', async () => {
+    const worker = new FakePhysicsWorker('manualStatus');
+    const controller = new PhysicsWorkerController({
+      createWorker: () => worker,
+      sessionId: 'reply-pair-session',
+    });
+    await controller.initialize([testBody]);
+
+    let pauseResolved = false;
+    const pause = controller.pause().then(() => {
+      pauseResolved = true;
+    });
+    const pauseCommand = worker.postedMessages.findLast(
+      (message): message is Extract<MainToWorkerMessage, { type: 'pause' }> =>
+        message.type === 'pause',
+    );
+    expect(pauseCommand).toBeDefined();
+    worker.sendStatus(1, null, 'paused');
+    await Promise.resolve();
+    expect(pauseResolved).toBe(false);
+    worker.sendStatus(1, pauseCommand?.sequence ?? null, 'paused');
+    await pause;
+    expect(pauseResolved).toBe(true);
+
+    let scaleResolved = false;
+    const scale = controller.setTimeScale(2_000).then(() => {
+      scaleResolved = true;
+    });
+    const scaleCommand = worker.postedMessages.findLast(
+      (message): message is Extract<MainToWorkerMessage, { type: 'setTimeScale' }> =>
+        message.type === 'setTimeScale',
+    );
+    expect(scaleCommand).toBeDefined();
+    worker.sendStatus(2_000, null, 'paused');
+    await Promise.resolve();
+    expect(scaleResolved).toBe(false);
+    worker.sendStatus(2_000, scaleCommand?.sequence ?? null, 'paused');
+    await scale;
+    expect(scaleResolved).toBe(true);
+
     controller.close();
   });
 
@@ -495,7 +603,7 @@ describe('PhysicsWorkerController', () => {
     expect(replaced).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
-      bodies: nextBodies,
+      state: { majorBodies: nextBodies },
     });
     expect(controller.bodyRevision).toBe(1);
     controller.close();
@@ -543,11 +651,20 @@ describe('PhysicsWorkerController', () => {
       ...testBody,
       id: 'planet',
       positionMeters: { x: 1, y: 2, z: 3 },
+      spinAngularMomentumKgMetersSquaredPerSecond: {
+        ...testBody.spinAngularMomentumKgMetersSquaredPerSecond,
+      },
+      materialLayers: testBody.materialLayers.map((layer) => ({ ...layer })),
     };
     const submittedBodies = [submittedPlanet];
 
     const replacement = controller.replaceBodies(submittedBodies, 0, 0);
     submittedPlanet.positionMeters.x = 999;
+    submittedPlanet.spinAngularMomentumKgMetersSquaredPerSecond.z = 999;
+    const firstLayer = submittedPlanet.materialLayers[0];
+    if (firstLayer !== undefined) {
+      firstLayer.massFraction = 0.5;
+    }
     submittedBodies.push({ ...testBody, id: 'late-body' });
 
     await expect(replacement).resolves.toMatchObject({ bodyRevision: 1 });
@@ -557,6 +674,8 @@ describe('PhysicsWorkerController', () => {
         expect.objectContaining({
           id: 'planet',
           positionMeters: { x: 1, y: 2, z: 3 },
+          spinAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
+          materialLayers: [{ material: 'silicate', massFraction: 1 }],
         }),
       ],
     });
@@ -576,8 +695,12 @@ describe('PhysicsWorkerController', () => {
     await vi.waitFor(() => {
       expect(worker.postedMessages.at(-1)?.type).toBe('replaceBodies');
     });
+    const timeScaleCommand = worker.postedMessages.find(
+      (message): message is Extract<MainToWorkerMessage, { type: 'setTimeScale' }> =>
+        message.type === 'setTimeScale',
+    );
     worker.sendReplacementError();
-    worker.sendStatus(2_000);
+    worker.sendStatus(2_000, timeScaleCommand?.sequence ?? null);
 
     await expect(replacement).rejects.toThrow('bodyReplacementFailed');
     await expect(timeScale).resolves.toBeUndefined();
@@ -594,8 +717,12 @@ describe('PhysicsWorkerController', () => {
     await controller.initialize([testBody]);
 
     const timeScale = controller.setTimeScale(2_000);
+    const timeScaleCommand = worker.postedMessages.findLast(
+      (message): message is Extract<MainToWorkerMessage, { type: 'setTimeScale' }> =>
+        message.type === 'setTimeScale',
+    );
     worker.sendUncorrelatedError();
-    worker.sendStatus(2_000);
+    worker.sendStatus(2_000, timeScaleCommand?.sequence ?? null);
 
     await expect(timeScale).resolves.toBeUndefined();
     expect(worker.terminated).toBe(false);

@@ -18,11 +18,33 @@ import type {
 
 const SOLAR_MASS_KG = 1.988_47e30;
 const SPEED_OF_LIGHT_METERS_PER_SECOND = 299_792_458;
+const SOLAR_RADIUS_METERS = 696_340_000;
+const EARTH_MASS_KG = 5.972_2e24;
+const EARTH_RADIUS_METERS = 6_371_000;
+const JUPITER_MASS_KG = 1.898_13e27;
+const JUPITER_RADIUS_METERS = 69_911_000;
+const MOON_MASS_KG = 7.342e22;
+const MOON_RADIUS_METERS = 1_737_400;
+const ASTEROID_MASS_KG = 1e19;
+const ASTEROID_RADIUS_METERS = 100_000;
 const ASTEROID_CLUSTER_SPREAD_METERS = 0.012 * ASTRONOMICAL_UNIT_METERS;
 const ASTEROID_VELOCITY_DISPERSION_METERS_PER_SECOND = 18;
 const MINIMUM_PREVIEW_DURATION_SECONDS = 6 * 3_600;
 const DEFAULT_PREVIEW_DURATION_SECONDS = 30 * JULIAN_DAY_SECONDS;
 const MAXIMUM_PREVIEW_DURATION_SECONDS = 365.25 * JULIAN_DAY_SECONDS;
+
+function axialSpinAngularMomentum(
+  massKg: number,
+  radiusMeters: number,
+  momentOfInertiaFactor: number,
+  rotationPeriodSeconds: number,
+): BodyState['spinAngularMomentumKgMetersSquaredPerSecond'] {
+  return {
+    x: 0,
+    y: 0,
+    z: (momentOfInertiaFactor * massKg * radiusMeters ** 2 * 2 * Math.PI) / rotationPeriodSeconds,
+  };
+}
 
 export const CREATION_PRESETS = [
   {
@@ -31,35 +53,82 @@ export const CREATION_PRESETS = [
     typeLabel: '类太阳恒星',
     color: 0xffd27a,
     massKg: SOLAR_MASS_KG,
-    radiusMeters: 696_340_000,
+    radiusMeters: SOLAR_RADIUS_METERS,
     bodyCount: 1,
+    spinAngularMomentumKgMetersSquaredPerSecond: axialSpinAngularMomentum(
+      SOLAR_MASS_KG,
+      SOLAR_RADIUS_METERS,
+      0.07,
+      25.38 * JULIAN_DAY_SECONDS,
+    ),
+    momentOfInertiaFactor: 0.07,
+    materialLayers: [{ material: 'gas', massFraction: 1 }],
+    collisionModel: 'stellar',
   },
   {
     id: 'rocky-planet',
     label: '岩石行星',
     typeLabel: '类地岩石行星',
     color: 0x70a9d6,
-    massKg: 5.972_2e24,
-    radiusMeters: 6_371_000,
+    massKg: EARTH_MASS_KG,
+    radiusMeters: EARTH_RADIUS_METERS,
     bodyCount: 1,
+    spinAngularMomentumKgMetersSquaredPerSecond: axialSpinAngularMomentum(
+      EARTH_MASS_KG,
+      EARTH_RADIUS_METERS,
+      0.3307,
+      86_164.0905,
+    ),
+    momentOfInertiaFactor: 0.3307,
+    materialLayers: [
+      { material: 'silicate', massFraction: 0.675 },
+      { material: 'iron', massFraction: 0.325 },
+    ],
+    collisionModel: 'gravitySolid',
   },
   {
     id: 'gas-giant',
     label: '气态行星',
     typeLabel: '类木气态巨行星',
     color: 0xd7a977,
-    massKg: 1.898_13e27,
-    radiusMeters: 69_911_000,
+    massKg: JUPITER_MASS_KG,
+    radiusMeters: JUPITER_RADIUS_METERS,
     bodyCount: 1,
+    spinAngularMomentumKgMetersSquaredPerSecond: axialSpinAngularMomentum(
+      JUPITER_MASS_KG,
+      JUPITER_RADIUS_METERS,
+      0.254,
+      9.925 * 3_600,
+    ),
+    momentOfInertiaFactor: 0.254,
+    materialLayers: [
+      { material: 'gas', massFraction: 0.9 },
+      { material: 'ice', massFraction: 0.06 },
+      { material: 'silicate', massFraction: 0.03 },
+      { material: 'iron', massFraction: 0.01 },
+    ],
+    collisionModel: 'gravityFluid',
   },
   {
     id: 'moon',
     label: '卫星',
     typeLabel: '岩质天然卫星',
     color: 0xb8b7b2,
-    massKg: 7.342e22,
-    radiusMeters: 1_737_400,
+    massKg: MOON_MASS_KG,
+    radiusMeters: MOON_RADIUS_METERS,
     bodyCount: 1,
+    spinAngularMomentumKgMetersSquaredPerSecond: axialSpinAngularMomentum(
+      MOON_MASS_KG,
+      MOON_RADIUS_METERS,
+      0.393,
+      27.321_661 * JULIAN_DAY_SECONDS,
+    ),
+    momentOfInertiaFactor: 0.393,
+    materialLayers: [
+      { material: 'silicate', massFraction: 0.98 },
+      { material: 'iron', massFraction: 0.02 },
+    ],
+    collisionModel: 'gravitySolid',
   },
   {
     id: 'black-hole',
@@ -70,15 +139,31 @@ export const CREATION_PRESETS = [
     radiusMeters:
       (2 * GRAVITATIONAL_CONSTANT_SI * 5 * SOLAR_MASS_KG) / SPEED_OF_LIGHT_METERS_PER_SECOND ** 2,
     bodyCount: 1,
+    spinAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 0 },
+    momentOfInertiaFactor: null,
+    materialLayers: [],
+    collisionModel: 'blackHole',
   },
   {
     id: 'asteroid-cluster',
     label: '小行星群',
     typeLabel: '6 颗独立小行星',
     color: 0x9d9488,
-    massKg: 1e19,
-    radiusMeters: 100_000,
+    massKg: ASTEROID_MASS_KG,
+    radiusMeters: ASTEROID_RADIUS_METERS,
     bodyCount: 6,
+    spinAngularMomentumKgMetersSquaredPerSecond: axialSpinAngularMomentum(
+      ASTEROID_MASS_KG,
+      ASTEROID_RADIUS_METERS,
+      0.4,
+      5 * 3_600,
+    ),
+    momentOfInertiaFactor: 0.4,
+    materialLayers: [
+      { material: 'silicate', massFraction: 0.8 },
+      { material: 'iron', massFraction: 0.2 },
+    ],
+    collisionModel: 'gravitySolid',
   },
 ] as const satisfies readonly CreationPreset[];
 
@@ -186,6 +271,12 @@ function createSingleBody(
     radiusMeters: preset.radiusMeters,
     positionMeters: { ...placement.positionMeters },
     velocityMetersPerSecond: { ...placement.velocityMetersPerSecond },
+    spinAngularMomentumKgMetersSquaredPerSecond: {
+      ...preset.spinAngularMomentumKgMetersSquaredPerSecond,
+    },
+    momentOfInertiaFactor: preset.momentOfInertiaFactor,
+    materialLayers: preset.materialLayers.map((layer) => ({ ...layer })),
+    collisionModel: preset.collisionModel,
   };
 }
 
@@ -214,6 +305,12 @@ function createAsteroidCluster(
         y: placement.velocityMetersPerSecond.y + Math.cos(angle) * velocityOffset,
         z: placement.velocityMetersPerSecond.z + zFactor * velocityOffset * 0.2,
       },
+      spinAngularMomentumKgMetersSquaredPerSecond: {
+        ...preset.spinAngularMomentumKgMetersSquaredPerSecond,
+      },
+      momentOfInertiaFactor: preset.momentOfInertiaFactor,
+      materialLayers: preset.materialLayers.map((layer) => ({ ...layer })),
+      collisionModel: preset.collisionModel,
     };
   });
 }

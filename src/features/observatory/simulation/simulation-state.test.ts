@@ -7,15 +7,23 @@ import {
   applyWorkerMessage,
   createInitialSimulationState,
 } from './simulation-state';
+import {
+  createTestBody,
+  createTestCollisionBatchMessage,
+  createTestDiagnostics,
+  createTestPhysicsState,
+  createTestReplacementMessage,
+  createTestStateMessage,
+} from './test-helpers';
 
 const bodies: readonly BodyState[] = [
-  {
+  createTestBody({
     id: 'earth',
     massKg: 5.9722e24,
     radiusMeters: 6_371_000,
     positionMeters: { x: 1, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 1, z: 0 },
-  },
+  }),
 ];
 
 const envelope = {
@@ -23,6 +31,7 @@ const envelope = {
   sessionId: 'test-session',
   sequence: 0,
   simulationTimeSeconds: 0,
+  replyToSequence: 0,
 } as const;
 
 describe('applyWorkerMessage', () => {
@@ -32,6 +41,7 @@ describe('applyWorkerMessage', () => {
     const running = applyWorkerMessage(ready, {
       ...envelope,
       sequence: 1,
+      replyToSequence: 1,
       type: 'status',
       runState: 'running',
       timeScale: 3_600,
@@ -48,34 +58,29 @@ describe('applyWorkerMessage', () => {
   it('用 state 原子替换天体、诊断和模拟时间', () => {
     const initial = createInitialSimulationState(bodies, 1);
     const nextBodies: BodyState[] = [
-      {
+      createTestBody({
         id: 'earth',
         massKg: 5.9722e24,
         radiusMeters: 6_371_000,
         positionMeters: { x: 0, y: 1, z: 0 },
         velocityMetersPerSecond: { x: 0, y: 1, z: 0 },
-      },
+      }),
     ];
-    const message: Extract<WorkerToMainMessage, { type: 'state' }> = {
-      ...envelope,
-      sequence: 2,
+    const message: Extract<WorkerToMainMessage, { type: 'state' }> = createTestStateMessage(2, {
       simulationTimeSeconds: 3_600,
-      type: 'state',
       bodyRevision: 0,
       bodies: nextBodies,
-      diagnostics: {
-        totalEnergyJoules: -1,
-        totalLinearMomentumKgMetersPerSecond: { x: 0, y: 0, z: 0 },
-        totalAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
-      },
-    };
+      replyToSequence: 2,
+    });
+    const diagnostics = message.state.diagnostics.activeRebound;
 
     expect(applyWorkerMessage(initial, message)).toMatchObject({
       phase: 'ready',
       runState: 'paused',
       bodies: nextBodies,
-      diagnostics: message.diagnostics,
-      baselineDiagnostics: message.diagnostics,
+      physicsState: message.state,
+      diagnostics,
+      baselineDiagnostics: diagnostics,
       bodySnapshotSimulationTimeSeconds: 3_600,
       simulationTimeSeconds: 3_600,
       latestAppliedSequence: 2,
@@ -86,7 +91,7 @@ describe('applyWorkerMessage', () => {
     );
 
     const baselineDiagnostics = {
-      ...message.diagnostics,
+      ...diagnostics,
       totalEnergyJoules: -2,
     };
     expect(
@@ -96,46 +101,44 @@ describe('applyWorkerMessage', () => {
 
   it('成功替换重置守恒基线并拒绝旧修订延迟帧', () => {
     const initial = createInitialSimulationState(bodies, 1);
-    const previousDiagnostics = {
-      totalEnergyJoules: -1,
-      totalLinearMomentumKgMetersPerSecond: { x: 0, y: 0, z: 0 },
-      totalAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
-    } as const;
+    const previousDiagnostics = createTestDiagnostics();
     const previous = {
       ...initial,
       phase: 'ready',
       runState: 'paused',
       diagnostics: previousDiagnostics,
       baselineDiagnostics: previousDiagnostics,
+      physicsState: createTestPhysicsState(bodies),
       latestAppliedSequence: 2,
       latestStateSequence: 2,
     } as const;
     const replacementBodies: BodyState[] = [
       ...bodies,
-      {
+      createTestBody({
         id: 'planet',
         massKg: 1e20,
         radiusMeters: 1_000,
         positionMeters: { x: 2, y: 0, z: 0 },
         velocityMetersPerSecond: { x: 0, y: 2, z: 0 },
-      },
+      }),
     ];
     const replacementDiagnostics = {
       ...previousDiagnostics,
       totalEnergyJoules: -2,
     };
-    const replaced = applyWorkerMessage(previous, {
-      ...envelope,
+    const replacement = createTestReplacementMessage({
       sequence: 3,
       simulationTimeSeconds: 7_200,
-      type: 'bodiesReplaced',
+      replyToSequence: 8,
       bodyRevision: 1,
       bodies: replacementBodies,
-      diagnostics: replacementDiagnostics,
+      totalEnergyJoules: replacementDiagnostics.totalEnergyJoules,
     });
+    const replaced = applyWorkerMessage(previous, replacement);
 
     expect(replaced).toMatchObject({
       bodies: replacementBodies,
+      physicsState: replacement.state,
       diagnostics: replacementDiagnostics,
       baselineDiagnostics: replacementDiagnostics,
       bodyRevision: 1,
@@ -146,16 +149,65 @@ describe('applyWorkerMessage', () => {
       simulationTimeSeconds: 7_200,
     });
 
-    const stale = applyWorkerMessage(replaced, {
-      ...envelope,
-      sequence: 4,
-      simulationTimeSeconds: 7_200,
-      type: 'state',
-      bodyRevision: 0,
-      bodies: [...bodies],
-      diagnostics: previousDiagnostics,
-    });
+    const stale = applyWorkerMessage(
+      replaced,
+      createTestStateMessage(4, {
+        simulationTimeSeconds: 7_200,
+        bodyRevision: 0,
+        bodies: [...bodies],
+      }),
+    );
     expect(stale).toBe(replaced);
+  });
+
+  it('碰撞批次原子替换完整物理状态，并拒绝随后到达的旧世界 state', () => {
+    const initial = {
+      ...createInitialSimulationState(bodies, 1),
+      phase: 'ready',
+      runState: 'running',
+      physicsState: createTestPhysicsState(bodies),
+      diagnostics: createTestDiagnostics(),
+      baselineDiagnostics: createTestDiagnostics(),
+      latestAppliedSequence: 2,
+      latestStateSequence: 2,
+    } as const;
+    const remnant = createTestBody({
+      id: 'collision-remnant',
+      massKg: 2,
+      positionMeters: { x: 5, y: 0, z: 0 },
+    });
+    const collision = createTestCollisionBatchMessage({
+      sequence: 3,
+      contactTimeSeconds: 20,
+      bodyRevisionBefore: 0,
+      bodyRevisionAfter: 1,
+      replyToSequence: null,
+      remnant,
+    });
+
+    const resolved = applyWorkerMessage(initial, collision);
+
+    expect(resolved).toMatchObject({
+      phase: 'ready',
+      runState: 'paused',
+      bodies: [remnant],
+      physicsState: collision.state,
+      diagnostics: collision.state.diagnostics.activeRebound,
+      baselineDiagnostics: collision.state.diagnostics.activeRebound,
+      bodyRevision: 1,
+      bodySnapshotSimulationTimeSeconds: 20,
+      simulationTimeSeconds: 20,
+      latestAppliedSequence: 3,
+      latestStateSequence: 3,
+      error: null,
+    });
+
+    const stale = createTestStateMessage(4, {
+      bodyRevision: 0,
+      bodies,
+      simulationTimeSeconds: 20,
+    });
+    expect(applyWorkerMessage(resolved, stale)).toBe(resolved);
   });
 
   it('可恢复错误保持 phase，不可恢复错误进入 error phase', () => {
@@ -166,7 +218,7 @@ describe('applyWorkerMessage', () => {
       code: 'invalidState',
       message: '请先暂停',
       recoverable: true,
-      requestSequence: 0,
+      replyToSequence: 0,
     });
     const fatal = applyWorkerMessage(ready, {
       ...envelope,
@@ -174,7 +226,7 @@ describe('applyWorkerMessage', () => {
       code: 'integrationFailed',
       message: '积分失败',
       recoverable: false,
-      requestSequence: null,
+      replyToSequence: null,
     });
 
     expect(recoverable.phase).toBe('ready');
@@ -195,6 +247,7 @@ describe('applyWorkerMessage', () => {
       ...envelope,
       sequence: 1,
       simulationTimeSeconds: 20,
+      replyToSequence: 1,
       type: 'status',
       runState: 'paused',
       timeScale: 1,
@@ -207,7 +260,7 @@ describe('applyWorkerMessage', () => {
       code: 'bodySnapshotConflict',
       message: '快照时间冲突',
       recoverable: true,
-      requestSequence: 1,
+      replyToSequence: 1,
     });
 
     expect(status).toMatchObject({
@@ -224,11 +277,7 @@ describe('applyWorkerMessage', () => {
 describe('applyControllerFatalError', () => {
   it('停止运行和待决命令，同时保留最后一帧可观测数据', () => {
     const initial = createInitialSimulationState(bodies, 86_400);
-    const diagnostics = {
-      totalEnergyJoules: -1,
-      totalLinearMomentumKgMetersPerSecond: { x: 0, y: 0, z: 0 },
-      totalAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 1 },
-    } as const;
+    const diagnostics = createTestDiagnostics();
     const running = {
       ...initial,
       phase: 'ready',

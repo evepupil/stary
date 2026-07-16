@@ -8,6 +8,7 @@ import {
   type TrajectoryPreviewRequest,
   type TrajectoryPreviewResponse,
 } from './schemas';
+import { createPreviewTestBody } from './test-helpers';
 
 const diagnostics = {
   totalEnergyJoules: 0,
@@ -15,20 +16,20 @@ const diagnostics = {
   totalAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 0 },
 } as const;
 const bodies: readonly BodyState[] = [
-  {
+  createPreviewTestBody({
     id: 'reference',
     massKg: 1e20,
     radiusMeters: 0,
     positionMeters: { x: 0, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  },
-  {
+  }),
+  createPreviewTestBody({
     id: 'draft',
     massKg: 1,
     radiusMeters: 0,
     positionMeters: { x: 1e7, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 1, z: 0 },
-  },
+  }),
 ];
 const request: TrajectoryPreviewRequest = {
   version: ORBIT_PREVIEW_PROTOCOL_VERSION,

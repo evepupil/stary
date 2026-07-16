@@ -1,20 +1,18 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BodyState } from '../../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../../test/fixtures/body-state';
 import {
   computeAngularDiskOverlapFraction,
   computeCombinedStellarTransmission,
   computeStellarVisibility,
 } from './stellar-occlusion';
 
-function body(id: string, x: number, y: number, radiusMeters: number): BodyState {
-  return {
+function body(id: string, x: number, y: number, radiusMeters: number) {
+  return createTestBodyState({
     id,
-    massKg: 1,
     positionMeters: { x, y, z: 0 },
     radiusMeters,
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  };
+  });
 }
 
 describe('stellar occlusion', () => {

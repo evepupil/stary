@@ -7,14 +7,15 @@ import {
   computeSweptCollisionFraction,
   isEscapingReferenceBody,
 } from './risk';
+import { createPreviewTestBody } from './test-helpers';
 
-const referenceBody: BodyState = {
+const referenceBody: BodyState = createPreviewTestBody({
   id: 'reference',
   massKg: 1e20,
   radiusMeters: 0,
   positionMeters: { x: 0, y: 0, z: 0 },
   velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-};
+});
 
 describe('trajectory preview risk calculations', () => {
   it('发现两个端点之间的扫掠最近距离', () => {

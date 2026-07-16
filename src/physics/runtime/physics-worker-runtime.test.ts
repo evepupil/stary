@@ -105,9 +105,15 @@ function command(
 }
 
 function replacementBodies(): readonly BodyState[] {
+  const scenarioBodies = createCircularSunEarthScenario().bodies;
+  const physicalTemplate = scenarioBodies.find((body) => body.id === 'earth');
+  if (physicalTemplate === undefined) {
+    throw new Error('太阳地球场景缺少地球资料');
+  }
   return [
-    ...createCircularSunEarthScenario().bodies,
+    ...scenarioBodies,
     {
+      ...physicalTemplate,
       id: 'planet',
       massKg: 1e20,
       radiusMeters: 1_000,
@@ -219,7 +225,14 @@ describe('PhysicsWorkerRuntime', () => {
 
     expect(harness.messages.map((message) => message.type)).toEqual(['ready', 'state']);
     expect(harness.messages[0]).toMatchObject({ sequence: 0, simulationTimeSeconds: 0 });
-    expect(harness.messages[1]).toMatchObject({ sequence: 1, simulationTimeSeconds: 123.5 });
+    expect(harness.messages[0]).toMatchObject({ replyToSequence: 0 });
+    expect(harness.messages[1]).toMatchObject({
+      sequence: 1,
+      replyToSequence: 1,
+      simulationTimeSeconds: 123.5,
+      requestedTargetSimulationTimeSeconds: 123.5,
+      state: { majorBodies: createCircularSunEarthScenario().bodies },
+    });
     expect(harness.simulation.timeSeconds).toBe(123.5);
   });
 
@@ -232,7 +245,11 @@ describe('PhysicsWorkerRuntime', () => {
 
     expect(harness.simulation.timeSeconds).toBe(0);
     expect(harness.scheduler.tasks.size).toBe(0);
-    expect(harness.messages.at(-1)).toMatchObject({ type: 'status', runState: 'paused' });
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'status',
+      replyToSequence: 2,
+      runState: 'paused',
+    });
   });
 
   it('运行中直接替换会安全暂停且不会创建候选实例', async () => {
@@ -252,6 +269,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'invalidState',
+      replyToSequence: 2,
       recoverable: true,
     });
     expect(harness.scheduler.tasks.size).toBe(0);
@@ -290,6 +308,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
+      replyToSequence: 3,
     });
   });
 
@@ -315,8 +334,9 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
+      replyToSequence: 2,
       simulationTimeSeconds: 123.5,
-      bodies: replacementBodies(),
+      state: { majorBodies: replacementBodies() },
     });
 
     await harness.runtime.receive(command(3, { type: 'step', stepSeconds: 60 }));
@@ -324,6 +344,8 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'state',
       bodyRevision: 1,
+      replyToSequence: 3,
+      requestedTargetSimulationTimeSeconds: 183.5,
       simulationTimeSeconds: 183.5,
     });
 
@@ -350,6 +372,7 @@ describe('PhysicsWorkerRuntime', () => {
       expect(harness.messages.at(-1)).toMatchObject({
         type: 'error',
         code: 'bodyReplacementFailed',
+        replyToSequence: 2,
         recoverable: true,
         simulationTimeSeconds: 10,
       });
@@ -365,6 +388,8 @@ describe('PhysicsWorkerRuntime', () => {
       expect(harness.messages.at(-1)).toMatchObject({
         type: 'state',
         bodyRevision: 0,
+        replyToSequence: 3,
+        requestedTargetSimulationTimeSeconds: 15,
         simulationTimeSeconds: 15,
       });
     },
@@ -386,6 +411,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'bodyRevisionConflict',
+      replyToSequence: 2,
       recoverable: true,
     });
     expect(harness.simulations).toHaveLength(1);
@@ -401,6 +427,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
+      replyToSequence: 3,
     });
   });
 
@@ -420,8 +447,8 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'bodySnapshotConflict',
+      replyToSequence: 2,
       recoverable: true,
-      requestSequence: 2,
       simulationTimeSeconds: 10,
     });
     expect(harness.simulations).toHaveLength(1);
@@ -438,6 +465,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
+      replyToSequence: 3,
       simulationTimeSeconds: 10,
     });
   });
@@ -453,6 +481,8 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.scheduler.tasks.size).toBe(1);
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'state',
+      replyToSequence: null,
+      requestedTargetSimulationTimeSeconds: 36_000,
       simulationTimeSeconds: 36_000,
     });
   });
@@ -469,6 +499,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect([...harness.scheduler.tasks.keys()]).toEqual(scheduledTaskIds);
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'status',
+      replyToSequence: 2,
       runState: 'running',
     });
     expect(harness.messages.some((message) => message.type === 'error')).toBe(false);
@@ -521,6 +552,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.simulation.timeSeconds).toBe(86_400);
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'status',
+      replyToSequence: null,
       runState: 'running',
       timeScale: 86_400,
     });
@@ -530,6 +562,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.simulation.timeSeconds).toBeCloseTo(87_782.4, 8);
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'state',
+      replyToSequence: null,
       simulationTimeSeconds: 87_782.4,
     });
   });
@@ -547,6 +580,7 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.scheduler.tasks.size).toBe(0);
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'status',
+      replyToSequence: 3,
       runState: 'paused',
       timeScale: 86_400,
     });
@@ -566,8 +600,8 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'invalidCommand',
+      replyToSequence: 1,
       recoverable: true,
-      requestSequence: 1,
     });
     expect(harness.scheduler.tasks.size).toBe(0);
 
@@ -575,14 +609,14 @@ describe('PhysicsWorkerRuntime', () => {
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'invalidCommand',
-      requestSequence: null,
+      replyToSequence: null,
     });
 
     await harness.runtime.reportMessageError();
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
       code: 'invalidCommand',
-      requestSequence: null,
+      replyToSequence: null,
     });
   });
 
@@ -597,7 +631,7 @@ describe('PhysicsWorkerRuntime', () => {
       type: 'error',
       code: 'integrationFailed',
       recoverable: false,
-      requestSequence: 1,
+      replyToSequence: 1,
     });
   });
 
@@ -613,7 +647,7 @@ describe('PhysicsWorkerRuntime', () => {
       type: 'error',
       code: 'integrationFailed',
       recoverable: false,
-      requestSequence: null,
+      replyToSequence: null,
     });
   });
 
@@ -626,7 +660,11 @@ describe('PhysicsWorkerRuntime', () => {
 
     expect(harness.simulation.destroyCount).toBe(1);
     expect(harness.closed).toBe(true);
-    expect(harness.messages.at(-1)).toMatchObject({ type: 'disposed', sequence: 1 });
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'disposed',
+      sequence: 1,
+      replyToSequence: 1,
+    });
     expect(harness.messages).toHaveLength(messageCount);
   });
 });

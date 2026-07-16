@@ -60,6 +60,16 @@ function relativeError(initial: number, final: number): number {
   return Math.abs((final - initial) / initial);
 }
 
+function expectPhysicalMetadata(actual: BodyState, expected: BodyState): void {
+  expect(actual).toMatchObject({
+    collisionModel: expected.collisionModel,
+    materialLayers: expected.materialLayers,
+    momentOfInertiaFactor: expected.momentOfInertiaFactor,
+    spinAngularMomentumKgMetersSquaredPerSecond:
+      expected.spinAngularMomentumKgMetersSquaredPerSecond,
+  });
+}
+
 async function loadSimulation(
   bodies: readonly BodyState[],
   initialTimeSeconds = 0,
@@ -133,6 +143,7 @@ async function runWithTimeScale(timeScale: number, realMilliseconds: number) {
   if (state === undefined) {
     throw new Error('倍率运行没有返回 state');
   }
+  expect(state.replyToSequence).toBeNull();
   return state;
 }
 
@@ -145,6 +156,10 @@ describe('正式 REBOUND simulation', () => {
 
     try {
       expect(offset.timeSeconds).toBe(timeOriginSeconds);
+      const initialOffsetBodies = offset.snapshot().bodies;
+      for (const sourceBody of scenario.bodies) {
+        expectPhysicalMetadata(bodyById(initialOffsetBodies, sourceBody.id), sourceBody);
+      }
       expect(
         vectorDifferenceMagnitude(
           relativePosition(offset.snapshot().bodies),
@@ -155,6 +170,9 @@ describe('正式 REBOUND simulation', () => {
       baseline.integrateTo(60);
       offset.integrateTo(timeOriginSeconds + 60);
       expect(offset.timeSeconds).toBe(timeOriginSeconds + 60);
+      const steppedEarth = bodyById(offset.snapshot().bodies, 'earth');
+      const sourceEarth = bodyById(scenario.bodies, 'earth');
+      expectPhysicalMetadata(steppedEarth, sourceEarth);
       expect(
         vectorDifferenceMagnitude(
           relativePosition(offset.snapshot().bodies),
@@ -170,6 +188,32 @@ describe('正式 REBOUND simulation', () => {
     } finally {
       baseline.destroy();
       offset.destroy();
+    }
+  });
+
+  it('每次快照都深拷贝材料层和自转资料', async () => {
+    const scenario = createCircularSunEarthScenario();
+    const simulation = await loadSimulation(scenario.bodies);
+
+    try {
+      const firstEarth = bodyById(simulation.snapshot().bodies, 'earth');
+      const sourceEarth = bodyById(scenario.bodies, 'earth');
+      firstEarth.spinAngularMomentumKgMetersSquaredPerSecond.z = -1;
+      const firstLayer = firstEarth.materialLayers[0];
+      if (firstLayer === undefined) {
+        throw new Error('测试地球缺少材料层');
+      }
+      firstLayer.massFraction = 0.1;
+
+      const secondEarth = bodyById(simulation.snapshot().bodies, 'earth');
+      expectPhysicalMetadata(secondEarth, sourceEarth);
+      expect(secondEarth.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+        firstEarth.spinAngularMomentumKgMetersSquaredPerSecond,
+      );
+      expect(secondEarth.materialLayers).not.toBe(firstEarth.materialLayers);
+      expect(secondEarth.materialLayers[0]).not.toBe(firstEarth.materialLayers[0]);
+    } finally {
+      simulation.destroy();
     }
   });
 
@@ -258,8 +302,8 @@ describe('正式 REBOUND simulation', () => {
     expect(one.simulationTimeSeconds).toBe(36_000);
     expect(two.simulationTimeSeconds).toBe(36_000);
     for (const id of ['sun', 'earth']) {
-      const bodyOne = bodyById(one.bodies, id);
-      const bodyTwo = bodyById(two.bodies, id);
+      const bodyOne = bodyById(one.state.majorBodies, id);
+      const bodyTwo = bodyById(two.state.majorBodies, id);
       expect(vectorDifferenceMagnitude(bodyOne.positionMeters, bodyTwo.positionMeters)).toBe(0);
       expect(
         vectorDifferenceMagnitude(bodyOne.velocityMetersPerSecond, bodyTwo.velocityMetersPerSecond),
@@ -296,9 +340,15 @@ describe('正式 REBOUND simulation', () => {
     if (beforeReplacement?.type !== 'state') {
       throw new Error('替换前缺少真实 state');
     }
+    expect(beforeReplacement).toMatchObject({
+      replyToSequence: 1,
+      requestedTargetSimulationTimeSeconds: 60,
+    });
+    const physicalTemplate = bodyById(beforeReplacement.state.majorBodies, 'earth');
     const submittedBodies: BodyState[] = [
-      ...beforeReplacement.bodies,
+      ...beforeReplacement.state.majorBodies,
       {
+        ...physicalTemplate,
         id: 'test-planet',
         massKg: 1e20,
         radiusMeters: 1_000,
@@ -318,41 +368,47 @@ describe('正式 REBOUND simulation', () => {
     expect(replaced).toMatchObject({
       type: 'bodiesReplaced',
       bodyRevision: 1,
+      replyToSequence: 2,
       simulationTimeSeconds: 60,
     });
     if (replaced?.type !== 'bodiesReplaced') {
       throw new Error('缺少 bodiesReplaced 确认');
     }
-    expect(replaced.bodies).toHaveLength(3);
-    const initialPlanet = bodyById(replaced.bodies, 'test-planet');
+    expect(replaced.state.majorBodies).toHaveLength(3);
+    const initialPlanet = bodyById(replaced.state.majorBodies, 'test-planet');
+    expectPhysicalMetadata(initialPlanet, physicalTemplate);
 
     await send({ ...envelope(3), type: 'step', stepSeconds: 60 });
     const afterStep = messages.at(-1);
     expect(afterStep).toMatchObject({
       type: 'state',
       bodyRevision: 1,
+      replyToSequence: 3,
+      requestedTargetSimulationTimeSeconds: 120,
       simulationTimeSeconds: 120,
     });
     if (afterStep?.type !== 'state') {
       throw new Error('替换后缺少 state');
     }
-    expect(afterStep.bodies).toHaveLength(3);
+    expect(afterStep.state.majorBodies).toHaveLength(3);
     expect(
       vectorDifferenceMagnitude(
-        bodyById(afterStep.bodies, 'test-planet').positionMeters,
+        bodyById(afterStep.state.majorBodies, 'test-planet').positionMeters,
         initialPlanet.positionMeters,
       ),
     ).toBeGreaterThan(0);
-    expect(Number.isFinite(afterStep.diagnostics.totalEnergyJoules)).toBe(true);
+    const steppedPlanet = bodyById(afterStep.state.majorBodies, 'test-planet');
+    expectPhysicalMetadata(steppedPlanet, initialPlanet);
+    expect(Number.isFinite(afterStep.state.diagnostics.activeRebound.totalEnergyJoules)).toBe(true);
     expect(
-      Object.values(afterStep.diagnostics.totalLinearMomentumKgMetersPerSecond).every(
-        Number.isFinite,
-      ),
+      Object.values(
+        afterStep.state.diagnostics.activeRebound.totalLinearMomentumKgMetersPerSecond,
+      ).every(Number.isFinite),
     ).toBe(true);
     expect(
-      Object.values(afterStep.diagnostics.totalAngularMomentumKgMetersSquaredPerSecond).every(
-        Number.isFinite,
-      ),
+      Object.values(
+        afterStep.state.diagnostics.activeRebound.totalAngularMomentumKgMetersSquaredPerSecond,
+      ).every(Number.isFinite),
     ).toBe(true);
 
     await send({ ...envelope(4), type: 'dispose' });

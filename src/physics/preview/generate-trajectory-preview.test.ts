@@ -8,6 +8,7 @@ import {
   generateTrajectoryPreview,
 } from './generate-trajectory-preview';
 import { ORBIT_PREVIEW_PROTOCOL_VERSION, type TrajectoryPreviewRequest } from './schemas';
+import { createPreviewTestBody } from './test-helpers';
 
 const diagnostics = {
   totalEnergyJoules: 0,
@@ -79,13 +80,13 @@ class CurvedSimulation implements ReboundSimulation {
 }
 
 function body(id: string, x: number, velocityX = 0, radiusMeters = 0): BodyState {
-  return {
+  return createPreviewTestBody({
     id,
     massKg: id === 'reference' ? 1e20 : 1,
     radiusMeters,
     positionMeters: { x, y: 0, z: 0 },
     velocityMetersPerSecond: { x: velocityX, y: 0, z: 0 },
-  };
+  });
 }
 
 function request(bodies: readonly BodyState[], overrides: Partial<TrajectoryPreviewRequest> = {}) {

@@ -13,6 +13,7 @@ import {
   formatSimulationTime,
   formatSpeed,
 } from './simulation-view-model';
+import { createTestBody } from './test-helpers';
 
 describe('simulation view model formatters', () => {
   it('按秒、天和年组织模拟时间', () => {
@@ -31,13 +32,15 @@ describe('simulation view model formatters', () => {
   });
 
   it('组合天体的位置、速度和质量读数', () => {
-    const viewModel = createBodyViewModel({
-      id: 'earth',
-      massKg: 5.9722e24,
-      radiusMeters: 6_371_000,
-      positionMeters: { x: 149_597_870_700, y: 0, z: 0 },
-      velocityMetersPerSecond: { x: 0, y: 29_780, z: 0 },
-    });
+    const viewModel = createBodyViewModel(
+      createTestBody({
+        id: 'earth',
+        massKg: 5.9722e24,
+        radiusMeters: 6_371_000,
+        positionMeters: { x: 149_597_870_700, y: 0, z: 0 },
+        velocityMetersPerSecond: { x: 0, y: 29_780, z: 0 },
+      }),
+    );
 
     expect(viewModel).toMatchObject({
       id: 'earth',
@@ -48,20 +51,20 @@ describe('simulation view model formatters', () => {
   });
 
   it('按轨道父级计算相对速度', () => {
-    const earth = {
+    const earth = createTestBody({
       id: 'earth',
       massKg: 5.9722e24,
       radiusMeters: 6_371_000,
       positionMeters: { x: 0, y: 0, z: 0 },
       velocityMetersPerSecond: { x: -29_780, y: 0, z: 0 },
-    };
-    const moon = {
+    });
+    const moon = createTestBody({
       id: 'moon',
       massKg: 7.34e22,
       radiusMeters: 1_737_530,
       positionMeters: { x: 384_400_000, y: 0, z: 0 },
       velocityMetersPerSecond: { x: -29_780, y: 1_022, z: 0 },
-    };
+    });
 
     expect(calculateRelativeSpeedMetersPerSecond(moon, earth)).toBe(1_022);
     expect(calculateRelativeSpeedMetersPerSecond(moon, null)).toBeCloseTo(29_797.5, 1);

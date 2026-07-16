@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BodyState } from '../../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../../test/fixtures/body-state';
 import {
   estimateMainSequenceStar,
   kelvinToSrgbHex,
@@ -11,14 +11,12 @@ import {
 const SOLAR_MASS_KG = 1.988_47e30;
 const SOLAR_RADIUS_METERS = 696_340_000;
 
-function body(id: string, massKg = 1, radiusMeters = 1): BodyState {
-  return {
+function body(id: string, massKg = 1, radiusMeters = 1) {
+  return createTestBodyState({
     id,
     massKg,
     radiusMeters,
-    positionMeters: { x: 0, y: 0, z: 0 },
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  };
+  });
 }
 
 describe('body appearance', () => {

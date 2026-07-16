@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BodyState } from '../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import {
   computeMetersToSceneUnit,
   computePositionRingRadius,
@@ -11,14 +11,12 @@ import {
   shouldRecomputeSceneScale,
 } from './coordinates';
 
-function body(id: string, x: number, radiusMeters: number): BodyState {
-  return {
+function body(id: string, x: number, radiusMeters: number) {
+  return createTestBodyState({
     id,
-    massKg: 1,
     radiusMeters,
     positionMeters: { x, y: 0, z: 0 },
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  };
+  });
 }
 
 describe('observatory coordinate projection', () => {

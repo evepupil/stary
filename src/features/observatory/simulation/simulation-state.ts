@@ -1,6 +1,7 @@
 import type {
   BodyState,
   PhysicsDiagnostics,
+  PhysicsState,
   WorkerToMainMessage,
 } from '../../../physics/protocol/schemas';
 
@@ -11,6 +12,7 @@ export interface UniverseSimulationState {
   readonly phase: SimulationPhase;
   readonly runState: SimulationRunState;
   readonly bodies: readonly BodyState[];
+  readonly physicsState: PhysicsState | null;
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
   readonly bodyRevision: number;
@@ -31,6 +33,7 @@ export function createInitialSimulationState(
     phase: 'initializing',
     runState: 'idle',
     bodies,
+    physicsState: null,
     diagnostics: null,
     baselineDiagnostics: null,
     bodyRevision: 0,
@@ -82,12 +85,13 @@ export function applyWorkerMessage(
         ...state,
         phase: 'ready',
         runState: state.runState === 'running' ? 'running' : 'paused',
-        bodies: message.bodies,
-        diagnostics: message.diagnostics,
+        bodies: message.state.majorBodies,
+        physicsState: message.state,
+        diagnostics: message.state.diagnostics.activeRebound,
         baselineDiagnostics:
           message.bodyRevision === state.bodyRevision
-            ? (state.baselineDiagnostics ?? message.diagnostics)
-            : message.diagnostics,
+            ? (state.baselineDiagnostics ?? message.state.diagnostics.activeRebound)
+            : message.state.diagnostics.activeRebound,
         bodyRevision: message.bodyRevision,
         bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
         simulationTimeSeconds: message.simulationTimeSeconds,
@@ -105,13 +109,36 @@ export function applyWorkerMessage(
         ...state,
         phase: 'ready',
         runState: 'paused',
-        bodies: message.bodies,
-        diagnostics: message.diagnostics,
-        baselineDiagnostics: message.diagnostics,
+        bodies: message.state.majorBodies,
+        physicsState: message.state,
+        diagnostics: message.state.diagnostics.activeRebound,
+        baselineDiagnostics: message.state.diagnostics.activeRebound,
         bodyRevision: message.bodyRevision,
         bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
         simulationTimeSeconds: message.simulationTimeSeconds,
         latestAppliedSequence: message.sequence,
+        error: null,
+      };
+    case 'collisionBatchResolved':
+      if (
+        message.bodyRevisionAfter <= state.bodyRevision ||
+        message.sequence <= state.latestAppliedSequence
+      ) {
+        return state;
+      }
+      return {
+        ...state,
+        phase: 'ready',
+        runState: 'paused',
+        bodies: message.state.majorBodies,
+        physicsState: message.state,
+        diagnostics: message.state.diagnostics.activeRebound,
+        baselineDiagnostics: message.state.diagnostics.activeRebound,
+        bodyRevision: message.bodyRevisionAfter,
+        bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
+        simulationTimeSeconds: message.simulationTimeSeconds,
+        latestAppliedSequence: message.sequence,
+        latestStateSequence: message.sequence,
         error: null,
       };
     case 'status':

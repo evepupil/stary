@@ -1,5 +1,6 @@
 import type { BodyState } from '../protocol/schemas';
 import { ASTRONOMICAL_UNIT_METERS, GRAVITATIONAL_CONSTANT_SI } from '../constants';
+import { cloneSolarSystemPhysicalBodyFields } from './solar-system-physical-profiles';
 
 export const SUN_MASS_KG = 1.98847e30;
 export const EARTH_MASS_KG = 5.9722e24;
@@ -38,6 +39,7 @@ export function createSunEarthScenario(eccentricity = 0): SunEarthScenario {
     bodies: [
       {
         id: 'sun',
+        ...cloneSolarSystemPhysicalBodyFields('sun'),
         massKg: SUN_MASS_KG,
         radiusMeters: SUN_RADIUS_METERS,
         positionMeters: { x: -sunDistanceMeters, y: 0, z: 0 },
@@ -45,6 +47,7 @@ export function createSunEarthScenario(eccentricity = 0): SunEarthScenario {
       },
       {
         id: 'earth',
+        ...cloneSolarSystemPhysicalBodyFields('earth'),
         massKg: EARTH_MASS_KG,
         radiusMeters: EARTH_RADIUS_METERS,
         positionMeters: { x: earthDistanceMeters, y: 0, z: 0 },

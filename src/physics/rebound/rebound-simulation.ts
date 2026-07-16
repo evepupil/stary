@@ -2,7 +2,12 @@ import createReboundModule from '../../../spikes/rebound-wasm/dist/rebound.mjs';
 
 import { REBOUND_WASM_URL } from '../../platform/wasm/rebound-asset';
 import { GRAVITATIONAL_CONSTANT_SI } from '../constants';
-import { MAX_MAJOR_BODY_COUNT, type BodyState, type PhysicsDiagnostics } from '../protocol/schemas';
+import {
+  bodyStatesSchema,
+  MAX_MAJOR_BODY_COUNT,
+  type BodyState,
+  type PhysicsDiagnostics,
+} from '../protocol/schemas';
 import type {
   ReboundEmscriptenModule,
   ReboundHandle,
@@ -83,7 +88,7 @@ function checkStatus(operation: string, status: number): void {
   }
 }
 
-function validateBodies(bodies: readonly BodyState[]): void {
+function validateBodies(bodies: readonly BodyState[]): BodyState[] {
   if (bodies.length === 0 || bodies.length > MAX_MAJOR_BODY_COUNT) {
     throw new Error(`天体数量必须在 1 到 ${String(MAX_MAJOR_BODY_COUNT)} 之间`);
   }
@@ -116,6 +121,8 @@ function validateBodies(bodies: readonly BodyState[]): void {
       body.velocityMetersPerSecond.z,
     );
   }
+
+  return bodyStatesSchema.parse(bodies);
 }
 
 function moduleOptions(
@@ -135,7 +142,7 @@ class ReboundSimulationAdapter implements ReboundSimulation {
   public constructor(
     private readonly module: ReboundEmscriptenModule,
     handle: ReboundHandle,
-    private readonly bodyIds: readonly string[],
+    private readonly bodyMetadata: readonly BodyState[],
     private readonly timeOriginSeconds: number,
   ) {
     this.handle = handle;
@@ -173,14 +180,14 @@ class ReboundSimulationAdapter implements ReboundSimulation {
   public snapshot(): ReboundSnapshot {
     const handle = this.requireHandle();
     const count = this.module._stary_reb_particle_count(handle);
-    if (!Number.isSafeInteger(count) || count !== this.bodyIds.length) {
+    if (!Number.isSafeInteger(count) || count !== this.bodyMetadata.length) {
       throw new Error(
-        `REBOUND 粒子数量异常：预期 ${String(this.bodyIds.length)}，实际为 ${String(count)}`,
+        `REBOUND 粒子数量异常：预期 ${String(this.bodyMetadata.length)}，实际为 ${String(count)}`,
       );
     }
 
-    const bodies = this.bodyIds.map((id, particleIndex) =>
-      this.readBody(handle, particleIndex, id),
+    const bodies = this.bodyMetadata.map((metadata, particleIndex) =>
+      this.readBody(handle, particleIndex, metadata),
     );
     const diagnostics = this.readDiagnostics(handle, bodies);
     return { bodies, diagnostics };
@@ -203,7 +210,7 @@ class ReboundSimulationAdapter implements ReboundSimulation {
     return this.handle;
   }
 
-  private readBody(handle: ReboundHandle, particleIndex: number, id: string): BodyState {
+  private readBody(handle: ReboundHandle, particleIndex: number, metadata: BodyState): BodyState {
     const read = (component: ReboundParticleComponent, label: string): number =>
       finiteNumber(
         `particle[${String(particleIndex)}].${label}`,
@@ -211,7 +218,11 @@ class ReboundSimulationAdapter implements ReboundSimulation {
       );
 
     return {
-      id,
+      ...metadata,
+      spinAngularMomentumKgMetersSquaredPerSecond: {
+        ...metadata.spinAngularMomentumKgMetersSquaredPerSecond,
+      },
+      materialLayers: metadata.materialLayers.map((layer) => ({ ...layer })),
       massKg: positiveFiniteNumber(
         `particle[${String(particleIndex)}].mass`,
         read(PARTICLE_COMPONENT.mass, 'mass'),
@@ -282,7 +293,7 @@ export async function createReboundSimulation(
   bodies: readonly BodyState[],
   options: CreateReboundSimulationOptions = {},
 ): Promise<ReboundSimulation> {
-  validateBodies(bodies);
+  const validatedBodies = validateBodies(bodies);
   const gravitationalConstant = positiveFiniteNumber(
     'gravitationalConstant',
     options.gravitationalConstant ?? DEFAULT_GRAVITATIONAL_CONSTANT,
@@ -303,7 +314,7 @@ export async function createReboundSimulation(
   }
 
   try {
-    for (const body of bodies) {
+    for (const body of validatedBodies) {
       checkStatus(
         `addParticle(${body.id})`,
         module._stary_reb_add_particle(
@@ -325,12 +336,7 @@ export async function createReboundSimulation(
     );
     checkStatus('moveToCenterOfMass', module._stary_reb_move_to_com(handle));
 
-    return new ReboundSimulationAdapter(
-      module,
-      handle,
-      bodies.map((body) => body.id),
-      initialTimeSeconds,
-    );
+    return new ReboundSimulationAdapter(module, handle, validatedBodies, initialTimeSeconds);
   } catch (error) {
     module._stary_reb_destroy(handle);
     throw error;

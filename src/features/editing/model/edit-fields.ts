@@ -214,11 +214,15 @@ export function parseBodyEditFields(
   return {
     success: true,
     body: {
-      id: originalBody.id,
+      ...originalBody,
       massKg,
       radiusMeters,
       positionMeters: { x: positionX, y: positionY, z: positionZ },
       velocityMetersPerSecond: { x: velocityX, y: velocityY, z: velocityZ },
+      spinAngularMomentumKgMetersSquaredPerSecond: {
+        ...originalBody.spinAngularMomentumKgMetersSquaredPerSecond,
+      },
+      materialLayers: originalBody.materialLayers.map((layer) => ({ ...layer })),
     },
   };
 }

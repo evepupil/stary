@@ -12,6 +12,10 @@ import {
   SOLAR_SYSTEM_HORIZONS_RECORDS,
   type HorizonsBodyRecord,
 } from './solar-system-data';
+import {
+  getSolarSystemPhysicalProfile,
+  SOLAR_SYSTEM_PHYSICAL_PROFILES,
+} from './solar-system-physical-profiles';
 import { createSolarSystemScenario } from './solar-system';
 
 const EXPECTED_IDS = [
@@ -67,7 +71,73 @@ describe('太阳系 J2000 场景', () => {
       expect(body.radiusMeters).toBe(source.meanRadiusKm * KILOMETERS_TO_METERS);
       expect(Object.values(body.positionMeters).every(Number.isFinite)).toBe(true);
       expect(Object.values(body.velocityMetersPerSecond).every(Number.isFinite)).toBe(true);
+      const profile = getSolarSystemPhysicalProfile(body.id as (typeof EXPECTED_IDS)[number]);
+      expect(body).toMatchObject({
+        collisionModel: profile.collisionModel,
+        materialLayers: profile.materialLayers,
+        momentOfInertiaFactor: profile.momentOfInertiaFactor,
+        spinAngularMomentumKgMetersSquaredPerSecond:
+          profile.spinAngularMomentumKgMetersSquaredPerSecond,
+      });
     }
+  });
+
+  it('星历与碰撞物理资料双向覆盖同一组固定 id', () => {
+    const horizonsIds = SOLAR_SYSTEM_HORIZONS_RECORDS.map((record) => record.id);
+    const profileIds = SOLAR_SYSTEM_PHYSICAL_PROFILES.map((profile) => profile.id);
+    const horizonsIdSet = new Set(horizonsIds);
+    const profileIdSet = new Set(profileIds);
+
+    expect(profileIds).toEqual(EXPECTED_IDS);
+    expect(new Set(profileIds).size).toBe(profileIds.length);
+    expect(horizonsIds.every((id) => profileIdSet.has(id))).toBe(true);
+    expect(profileIds.every((id) => horizonsIdSet.has(id))).toBe(true);
+  });
+
+  it('固定资料满足材料、惯性和自转字段约束', () => {
+    const materialOrder = { gas: 0, ice: 1, silicate: 2, iron: 3 } as const;
+
+    for (const profile of SOLAR_SYSTEM_PHYSICAL_PROFILES) {
+      expect(profile.momentOfInertiaFactor).toBeGreaterThan(0);
+      expect(profile.momentOfInertiaFactor).toBeLessThanOrEqual(0.4);
+      expect(profile.materialLayers.length).toBeGreaterThan(0);
+      expect(
+        profile.materialLayers.reduce((sum, layer) => sum + layer.massFraction, 0),
+      ).toBeCloseTo(1, 12);
+      for (let index = 1; index < profile.materialLayers.length; index += 1) {
+        const previous = profile.materialLayers[index - 1];
+        const current = profile.materialLayers[index];
+        expect(previous).toBeDefined();
+        expect(current).toBeDefined();
+        if (previous !== undefined && current !== undefined) {
+          expect(materialOrder[current.material]).toBeGreaterThan(materialOrder[previous.material]);
+        }
+      }
+      expect(
+        Object.values(profile.spinAngularMomentumKgMetersSquaredPerSecond).every(Number.isFinite),
+      ).toBe(true);
+      expect(Math.hypot(...Object.values(profile.spinAxisEclipticJ2000))).toBeCloseTo(1, 12);
+      const body = bodyById(createSolarSystemScenario().bodies, profile.id);
+      const expectedSpinMagnitude =
+        (profile.momentOfInertiaFactor * body.massKg * body.radiusMeters ** 2 * 2 * Math.PI) /
+        profile.rotationPeriodSeconds;
+      const actualSpin = profile.spinAngularMomentumKgMetersSquaredPerSecond;
+      const actualSpinMagnitude = Math.hypot(actualSpin.x, actualSpin.y, actualSpin.z);
+      expect(
+        Math.abs(actualSpinMagnitude / expectedSpinMagnitude - 1),
+        `${profile.id} 自转角动量模长`,
+      ).toBeLessThan(1e-3);
+      expect(actualSpin.x / actualSpinMagnitude).toBeCloseTo(profile.spinAxisEclipticJ2000.x, 12);
+      expect(actualSpin.y / actualSpinMagnitude).toBeCloseTo(profile.spinAxisEclipticJ2000.y, 12);
+      expect(actualSpin.z / actualSpinMagnitude).toBeCloseTo(profile.spinAxisEclipticJ2000.z, 12);
+    }
+
+    expect(
+      getSolarSystemPhysicalProfile('venus').spinAngularMomentumKgMetersSquaredPerSecond.z,
+    ).toBeLessThan(0);
+    expect(
+      getSolarSystemPhysicalProfile('uranus').spinAngularMomentumKgMetersSquaredPerSecond.z,
+    ).toBeLessThan(0);
   });
 
   it('转换到模型质心系且保持地月相对状态', () => {
@@ -100,6 +170,11 @@ describe('太阳系 J2000 场景', () => {
     const secondSun = bodyById(second.bodies, 'sun');
     expect(firstSun).not.toBe(secondSun);
     expect(firstSun.positionMeters).not.toBe(secondSun.positionMeters);
+    expect(firstSun.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+      secondSun.spinAngularMomentumKgMetersSquaredPerSecond,
+    );
+    expect(firstSun.materialLayers).not.toBe(secondSun.materialLayers);
+    expect(firstSun.materialLayers[0]).not.toBe(secondSun.materialLayers[0]);
   });
 });
 
@@ -114,6 +189,10 @@ describe('质心换算', () => {
           radiusMeters: 1,
           positionMeters: { x: 0, y: 0, z: 0 },
           velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
+          spinAngularMomentumKgMetersSquaredPerSecond: { x: 0, y: 0, z: 0 },
+          momentOfInertiaFactor: 0.4,
+          materialLayers: [{ material: 'silicate', massFraction: 1 }],
+          collisionModel: 'gravitySolid',
         },
       ]),
     ).toThrow('质量必须是正有限数');

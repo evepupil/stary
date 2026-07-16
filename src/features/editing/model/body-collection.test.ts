@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import type { BodyState } from '../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import {
   deleteBody,
   replaceEditedBody,
@@ -9,11 +10,12 @@ import {
 
 function body(id: string, massKg: number, x: number): BodyState {
   return {
-    id,
+    ...createTestBodyState({
+      id,
+      positionMeters: { x: Number.isFinite(x) ? x : 0, y: 0, z: 0 },
+    }),
     massKg,
-    radiusMeters: 1,
     positionMeters: { x, y: 0, z: 0 },
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
   };
 }
 
@@ -23,9 +25,15 @@ describe('body collection editing', () => {
     const earth = body('earth', 6e24, 10);
     Object.freeze(sun.positionMeters);
     Object.freeze(sun.velocityMetersPerSecond);
+    Object.freeze(sun.spinAngularMomentumKgMetersSquaredPerSecond);
+    sun.materialLayers.forEach(Object.freeze);
+    Object.freeze(sun.materialLayers);
     Object.freeze(sun);
     Object.freeze(earth.positionMeters);
     Object.freeze(earth.velocityMetersPerSecond);
+    Object.freeze(earth.spinAngularMomentumKgMetersSquaredPerSecond);
+    earth.materialLayers.forEach(Object.freeze);
+    Object.freeze(earth.materialLayers);
     Object.freeze(earth);
     const bodies = Object.freeze([sun, earth]);
     const replacement = { ...earth, massKg: 7e24 };
@@ -36,6 +44,11 @@ describe('body collection editing', () => {
     expect(result).not.toBe(bodies);
     expect(result[0]).not.toBe(sun);
     expect(result[0]?.positionMeters).not.toBe(sun.positionMeters);
+    expect(result[0]?.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+      sun.spinAngularMomentumKgMetersSquaredPerSecond,
+    );
+    expect(result[0]?.materialLayers).not.toBe(sun.materialLayers);
+    expect(result[0]?.materialLayers[0]).not.toBe(sun.materialLayers[0]);
   });
 
   it('替换时拒绝不存在、重复或被修改的 id', () => {
@@ -56,6 +69,10 @@ describe('body collection editing', () => {
 
     expect(result).toEqual([sun]);
     expect(result[0]).not.toBe(sun);
+    expect(result[0]?.materialLayers).not.toBe(sun.materialLayers);
+    expect(result[0]?.spinAngularMomentumKgMetersSquaredPerSecond).not.toBe(
+      sun.spinAngularMomentumKgMetersSquaredPerSecond,
+    );
     expect(bodies).toHaveLength(2);
   });
 

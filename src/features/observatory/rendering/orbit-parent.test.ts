@@ -1,16 +1,14 @@
 import { describe, expect, it } from 'vitest';
 
-import type { BodyState } from '../../../physics/protocol/schemas';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
 
-function createBody(id: string, massKg: number, x = 0): BodyState {
-  return {
+function createBody(id: string, massKg: number, x = 0) {
+  return createTestBodyState({
     id,
     massKg,
-    radiusMeters: 1,
     positionMeters: { x, y: 0, z: 0 },
-    velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  };
+  });
 }
 
 describe('orbit parent', () => {

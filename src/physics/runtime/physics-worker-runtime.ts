@@ -1,12 +1,9 @@
 import { ZodError } from 'zod';
 
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from '../protocol/parse-message';
-import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
-import {
-  bodyStatesSchema,
-  PHYSICS_PROTOCOL_VERSION,
-  physicsDiagnosticsSchema,
-} from '../protocol/schemas';
+import { createPhysicsStateFromSnapshot } from '../protocol/physics-state';
+import type { MainToWorkerMessage, PhysicsState, WorkerToMainMessage } from '../protocol/schemas';
+import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
 import { SessionSequenceGate } from '../protocol/session-sequence-gate';
 import {
   browserPhysicsScheduler,
@@ -19,6 +16,10 @@ import type { CreatePhysicsSimulation, PhysicsSimulation } from './physics-simul
 
 type RuntimeRunState = 'initialized' | 'paused' | 'running';
 type WorkerErrorCode = Extract<WorkerToMainMessage, { type: 'error' }>['code'];
+type RuntimeResponsePayload<Message extends WorkerToMainMessage = WorkerToMainMessage> =
+  Message extends WorkerToMainMessage
+    ? Omit<Message, 'version' | 'sessionId' | 'sequence' | 'simulationTimeSeconds'>
+    : never;
 
 export interface PhysicsWorkerRuntimeOptions {
   readonly closeWorker?: () => void;
@@ -50,6 +51,7 @@ export class PhysicsWorkerRuntime {
   #lastRealTimeMilliseconds: number | undefined;
   #nextResponseSequence = 0;
   #operationQueue: Promise<void> = Promise.resolve();
+  #physicsState: PhysicsState | undefined;
   #runState: RuntimeRunState | undefined;
   #scheduledTask: ScheduledPhysicsTask | undefined;
   #sessionId: string | undefined;
@@ -154,8 +156,9 @@ export class PhysicsWorkerRuntime {
 
     try {
       this.#simulation = await this.#createSimulation(message.bodies, 0);
+      this.#physicsState = createPhysicsStateFromSnapshot(this.#simulation.snapshot());
       this.#runState = 'initialized';
-      this.#send({ type: 'ready', bodyRevision: 0 });
+      this.#send({ type: 'ready', replyToSequence: message.sequence, bodyRevision: 0 });
     } catch (error) {
       this.#runState = undefined;
       this.#simulation?.destroy();
@@ -168,7 +171,7 @@ export class PhysicsWorkerRuntime {
 
   #start(): void {
     if (this.#runState === 'running') {
-      this.#sendStatus();
+      this.#sendStatus(this.#activeRequestSequence);
       return;
     }
     if (this.#requireLiveSimulation() === undefined) {
@@ -177,8 +180,12 @@ export class PhysicsWorkerRuntime {
 
     this.#runState = 'running';
     this.#lastRealTimeMilliseconds = this.#scheduler.nowMilliseconds();
-    this.#sendStatus();
-    this.#scheduleNextSlice();
+    try {
+      this.#scheduleNextSlice();
+      this.#sendStatus(this.#activeRequestSequence);
+    } catch (error) {
+      this.#failSafely('internalError', describeProtocolError(error));
+    }
   }
 
   #pause(): void {
@@ -192,7 +199,7 @@ export class PhysicsWorkerRuntime {
     this.#cancelScheduledSlice();
     this.#runState = 'paused';
     this.#lastRealTimeMilliseconds = undefined;
-    this.#sendStatus();
+    this.#sendStatus(this.#activeRequestSequence);
   }
 
   #step(stepSeconds: number): void {
@@ -218,7 +225,7 @@ export class PhysicsWorkerRuntime {
     try {
       simulation.integrateTo(targetTimeSeconds);
       this.#runState = 'paused';
-      this.#sendState();
+      this.#sendState(this.#activeRequestSequence, targetTimeSeconds);
     } catch (error) {
       this.#failSafely('integrationFailed', describeProtocolError(error));
     }
@@ -232,7 +239,7 @@ export class PhysicsWorkerRuntime {
       return;
     }
     this.#timeScale = timeScale;
-    this.#sendStatus();
+    this.#sendStatus(this.#activeRequestSequence);
   }
 
   async #replaceBodies(
@@ -265,17 +272,14 @@ export class PhysicsWorkerRuntime {
       return;
     }
     let candidateSimulation: PhysicsSimulation | undefined;
-    let candidateBodies: BodyState[] | undefined;
-    let candidateDiagnostics:
-      Extract<WorkerToMainMessage, { type: 'bodiesReplaced' }>['diagnostics'] | undefined;
+    let candidateState: PhysicsState | undefined;
     try {
       candidateSimulation = await this.#createSimulation(message.bodies, simulationTimeSeconds);
       if (candidateSimulation.timeSeconds !== simulationTimeSeconds) {
         throw new Error('候选物理模拟没有保留当前模拟时间');
       }
       const snapshot = candidateSimulation.snapshot();
-      candidateBodies = bodyStatesSchema.parse([...snapshot.bodies]);
-      candidateDiagnostics = physicsDiagnosticsSchema.parse(snapshot.diagnostics);
+      candidateState = createPhysicsStateFromSnapshot(snapshot, this.#physicsState);
     } catch (error) {
       if (candidateSimulation !== undefined && candidateSimulation !== previousSimulation) {
         candidateSimulation.destroy();
@@ -285,15 +289,16 @@ export class PhysicsWorkerRuntime {
     }
 
     this.#simulation = candidateSimulation;
+    this.#physicsState = candidateState;
     this.#bodyRevision += 1;
     if (candidateSimulation !== previousSimulation) {
       previousSimulation.destroy();
     }
     this.#send({
       type: 'bodiesReplaced',
+      replyToSequence: message.sequence,
       bodyRevision: this.#bodyRevision,
-      bodies: candidateBodies,
-      diagnostics: candidateDiagnostics,
+      state: candidateState,
     });
   }
 
@@ -307,9 +312,13 @@ export class PhysicsWorkerRuntime {
     const simulationTimeSeconds = simulation.timeSeconds;
     simulation.destroy();
     this.#simulation = undefined;
+    this.#physicsState = undefined;
     this.#runState = undefined;
     this.#disposed = true;
-    this.#send({ type: 'disposed' }, simulationTimeSeconds);
+    this.#send(
+      { type: 'disposed', replyToSequence: this.#activeRequestSequence ?? 0 },
+      simulationTimeSeconds,
+    );
     this.#closeWorker();
   }
 
@@ -383,9 +392,9 @@ export class PhysicsWorkerRuntime {
 
     try {
       simulation.integrateTo(nextTimeSeconds);
-      this.#sendState();
+      this.#sendState(null, nextTimeSeconds);
       if (reducedTimeScale) {
-        this.#sendStatus();
+        this.#sendStatus(null);
       }
       return true;
     } catch (error) {
@@ -405,25 +414,33 @@ export class PhysicsWorkerRuntime {
     }
   }
 
-  #sendState(): void {
+  #sendState(replyToSequence: number | null, requestedTargetSimulationTimeSeconds: number): void {
     const simulation = this.#requireLiveSimulation();
     if (simulation === undefined) {
       return;
     }
     const snapshot = simulation.snapshot();
+    const state = createPhysicsStateFromSnapshot(snapshot, this.#physicsState);
+    this.#physicsState = state;
     this.#send({
       type: 'state',
+      replyToSequence,
       bodyRevision: this.#bodyRevision,
-      bodies: [...snapshot.bodies],
-      diagnostics: snapshot.diagnostics,
+      requestedTargetSimulationTimeSeconds,
+      state,
     });
   }
 
-  #sendStatus(): void {
+  #sendStatus(replyToSequence: number | null): void {
     if (this.#runState === undefined) {
       return;
     }
-    this.#send({ type: 'status', runState: this.#runState, timeScale: this.#timeScale });
+    this.#send({
+      type: 'status',
+      replyToSequence,
+      runState: this.#runState,
+      timeScale: this.#timeScale,
+    });
   }
 
   #sendError(code: WorkerErrorCode, message: string, recoverable: boolean): void {
@@ -432,41 +449,12 @@ export class PhysicsWorkerRuntime {
       code,
       message: boundedErrorMessage(message),
       recoverable,
-      requestSequence: this.#activeRequestSequence,
+      replyToSequence: this.#activeRequestSequence,
     });
   }
 
   #send(
-    payload:
-      | { readonly bodyRevision: 0; readonly type: 'ready' }
-      | { readonly type: 'disposed' }
-      | {
-          readonly bodyRevision: number;
-          readonly bodies: BodyState[];
-          readonly diagnostics: Extract<WorkerToMainMessage, { type: 'state' }>['diagnostics'];
-          readonly type: 'state';
-        }
-      | {
-          readonly bodyRevision: number;
-          readonly bodies: BodyState[];
-          readonly diagnostics: Extract<
-            WorkerToMainMessage,
-            { type: 'bodiesReplaced' }
-          >['diagnostics'];
-          readonly type: 'bodiesReplaced';
-        }
-      | {
-          readonly runState: RuntimeRunState;
-          readonly timeScale: number;
-          readonly type: 'status';
-        }
-      | {
-          readonly code: WorkerErrorCode;
-          readonly message: string;
-          readonly recoverable: boolean;
-          readonly requestSequence: number | null;
-          readonly type: 'error';
-        },
+    payload: RuntimeResponsePayload,
     simulationTimeSeconds = this.#simulation?.timeSeconds ?? 0,
   ): void {
     if (this.#sessionId === undefined) {

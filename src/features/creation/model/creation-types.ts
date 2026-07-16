@@ -27,6 +27,12 @@ export interface CreationPreset {
   readonly massKg: number;
   readonly radiusMeters: number;
   readonly bodyCount: number;
+  readonly spinAngularMomentumKgMetersSquaredPerSecond: Readonly<
+    BodyState['spinAngularMomentumKgMetersSquaredPerSecond']
+  >;
+  readonly momentOfInertiaFactor: BodyState['momentOfInertiaFactor'];
+  readonly materialLayers: readonly BodyState['materialLayers'][number][];
+  readonly collisionModel: BodyState['collisionModel'];
 }
 
 export interface CreationDraft {

@@ -1,6 +1,16 @@
 import type { WorkerToMainMessage } from '../../../physics/protocol/schemas';
 
 type StateMessage = Extract<WorkerToMainMessage, { type: 'state' }>;
+type AtomicStateMessage = Extract<
+  WorkerToMainMessage,
+  { type: 'bodiesReplaced' | 'collisionBatchResolved' }
+>;
+
+function atomicBodyRevision(message: AtomicStateMessage): number {
+  return message.type === 'collisionBatchResolved'
+    ? message.bodyRevisionAfter
+    : message.bodyRevision;
+}
 
 export interface SimulationMessageBuffer {
   readonly stateMessage: StateMessage | null;
@@ -30,13 +40,18 @@ export function bufferSimulationMessage(
     return { stateMessage: message };
   }
 
-  if (
-    message.type === 'bodiesReplaced' &&
-    buffer.stateMessage !== null &&
-    (buffer.stateMessage.bodyRevision < message.bodyRevision ||
-      buffer.stateMessage.sequence <= message.sequence)
-  ) {
-    return EMPTY_SIMULATION_MESSAGE_BUFFER;
+  if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
+    const bufferedState = buffer.stateMessage;
+    if (bufferedState === null) {
+      return buffer;
+    }
+    const bodyRevision = atomicBodyRevision(message);
+    if (
+      bufferedState.bodyRevision < bodyRevision ||
+      (bufferedState.bodyRevision === bodyRevision && bufferedState.sequence <= message.sequence)
+    ) {
+      return EMPTY_SIMULATION_MESSAGE_BUFFER;
+    }
   }
 
   return buffer;

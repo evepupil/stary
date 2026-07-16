@@ -6,6 +6,10 @@ function cloneBody(body: BodyState): BodyState {
     ...body,
     positionMeters: { ...body.positionMeters },
     velocityMetersPerSecond: { ...body.velocityMetersPerSecond },
+    spinAngularMomentumKgMetersSquaredPerSecond: {
+      ...body.spinAngularMomentumKgMetersSquaredPerSecond,
+    },
+    materialLayers: body.materialLayers.map((layer) => ({ ...layer })),
   };
 }
 

@@ -8,14 +8,15 @@ import {
   trajectoryPreviewRequestSchema,
   trajectoryPreviewResponseSchema,
 } from './schemas';
+import { createPreviewTestBody } from './test-helpers';
 
-const referenceBody: BodyState = {
+const referenceBody: BodyState = createPreviewTestBody({
   id: 'reference',
   massKg: 1e20,
   radiusMeters: 1,
   positionMeters: { x: 0, y: 0, z: 0 },
   velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-};
+});
 const draftBody: BodyState = {
   ...referenceBody,
   id: 'draft',
@@ -43,6 +44,28 @@ describe('trajectory preview protocol', () => {
     const input = { ...request, referenceBodyId: null };
 
     expect(trajectoryPreviewRequestSchema.parse(input)).toEqual(input);
+  });
+
+  it.each([1, 2])('严格拒绝 v%s 旧版预览请求', (version) => {
+    expect(() => trajectoryPreviewRequestSchema.parse({ ...request, version })).toThrow();
+  });
+
+  it.each([
+    'spinAngularMomentumKgMetersSquaredPerSecond',
+    'momentOfInertiaFactor',
+    'materialLayers',
+    'collisionModel',
+  ] as const)('拒绝缺少 v3 天体字段 %s 的请求', (field) => {
+    const incompleteBody = Object.fromEntries(
+      Object.entries(referenceBody).filter(([property]) => property !== field),
+    );
+
+    expect(() =>
+      trajectoryPreviewRequestSchema.parse({
+        ...request,
+        bodies: [incompleteBody, draftBody],
+      }),
+    ).toThrow();
   });
 
   it.each([
@@ -101,6 +124,29 @@ describe('trajectory preview protocol', () => {
       trajectoryPreviewResponseSchema.parse({
         ...baseResult,
         risk: { ...baseResult.risk, kind: 'unknown' },
+      }),
+    ).toThrow();
+  });
+
+  it.each([1, 2])('严格拒绝 v%s 旧版预览响应', (version) => {
+    expect(() =>
+      trajectoryPreviewResponseSchema.parse({
+        version,
+        type: 'trajectoryPreviewResult',
+        requestId: 'request-1',
+        draftRevision: 3,
+        durationSeconds: 60,
+        tracks: [
+          {
+            bodyId: 'draft',
+            points: [
+              { timeSeconds: 0, positionMeters: { x: 0, y: 0, z: 0 } },
+              { timeSeconds: 60, positionMeters: { x: 1, y: 0, z: 0 } },
+            ],
+          },
+        ],
+        risk: { kind: 'stable', bodyId: null, otherBodyId: null, timeSeconds: null },
+        closestApproachMeters: 1,
       }),
     ).toThrow();
   });

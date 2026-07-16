@@ -6,6 +6,7 @@ import {
 import type { BodyState } from '../protocol/schemas';
 import { centerBodiesOnCenterOfMass } from './center-of-mass';
 import { SOLAR_SYSTEM_EPOCH, SOLAR_SYSTEM_HORIZONS_RECORDS } from './solar-system-data';
+import { cloneSolarSystemPhysicalBodyFields } from './solar-system-physical-profiles';
 
 export interface SolarSystemScenario {
   readonly bodies: readonly BodyState[];
@@ -15,6 +16,7 @@ export interface SolarSystemScenario {
 function recordToBody(record: (typeof SOLAR_SYSTEM_HORIZONS_RECORDS)[number]): BodyState {
   return {
     id: record.id,
+    ...cloneSolarSystemPhysicalBodyFields(record.id),
     massKg: (record.gmKm3PerSecond2 * CUBIC_KILOMETERS_TO_CUBIC_METERS) / GRAVITATIONAL_CONSTANT_SI,
     radiusMeters: record.meanRadiusKm * KILOMETERS_TO_METERS,
     positionMeters: {

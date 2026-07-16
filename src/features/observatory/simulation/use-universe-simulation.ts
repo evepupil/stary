@@ -1,7 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { PhysicsWorkerController } from '../../../physics/controller/physics-worker-controller';
-import type { BodyState, PhysicsDiagnostics } from '../../../physics/protocol/schemas';
+import type {
+  BodyState,
+  PhysicsDiagnostics,
+  PhysicsState,
+} from '../../../physics/protocol/schemas';
 import { createSolarSystemScenario } from '../../../physics/scenarios/solar-system';
 import {
   applyControllerFatalError,
@@ -25,6 +29,7 @@ export interface UniverseSimulation {
   readonly phase: SimulationPhase;
   readonly runState: SimulationRunState;
   readonly bodies: readonly BodyState[];
+  readonly physicsState: PhysicsState | null;
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
   readonly bodyRevision: number;
@@ -168,7 +173,7 @@ export function useUniverseSimulation(): UniverseSimulation {
         runStateRef.current = 'initialized';
       } else if (message.type === 'status') {
         runStateRef.current = message.runState;
-      } else if (message.type === 'bodiesReplaced') {
+      } else if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
         runStateRef.current = 'paused';
       } else if (message.type === 'error') {
         runStateRef.current = 'paused';

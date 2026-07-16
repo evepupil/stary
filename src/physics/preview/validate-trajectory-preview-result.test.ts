@@ -6,23 +6,24 @@ import {
   type TrajectoryPreviewRequest,
   type TrajectoryPreviewResult,
 } from './schemas';
+import { createPreviewTestBody } from './test-helpers';
 import { validateTrajectoryPreviewResultForRequest } from './validate-trajectory-preview-result';
 
 const bodies: readonly BodyState[] = [
-  {
+  createPreviewTestBody({
     id: 'reference',
     massKg: 1e20,
     radiusMeters: 1,
     positionMeters: { x: 0, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  },
-  {
+  }),
+  createPreviewTestBody({
     id: 'draft',
     massKg: 1,
     radiusMeters: 1,
     positionMeters: { x: 10, y: 0, z: 0 },
     velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-  },
+  }),
 ];
 
 const request: TrajectoryPreviewRequest = {

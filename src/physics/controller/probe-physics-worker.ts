@@ -41,8 +41,8 @@ export async function probePhysicsWorker(
     await controller.start();
     await controller.pause();
     const simulationTimeBeforeStep = controller.simulationTimeSeconds;
-    const state = await controller.step(PHYSICS_PROBE_STEP_SECONDS);
-    const stepSeconds = state.simulationTimeSeconds - simulationTimeBeforeStep;
+    const advance = await controller.step(PHYSICS_PROBE_STEP_SECONDS);
+    const stepSeconds = advance.simulationTimeSeconds - simulationTimeBeforeStep;
     if (Math.abs(stepSeconds - PHYSICS_PROBE_STEP_SECONDS) > 1e-9) {
       throw new Error(
         `Physics Worker 单步推进量错误：预期 ${String(PHYSICS_PROBE_STEP_SECONDS)} 秒，实际 ${String(stepSeconds)} 秒`,
@@ -50,8 +50,8 @@ export async function probePhysicsWorker(
     }
     await controller.dispose();
     return {
-      bodyCount: state.bodies.length,
-      simulationTimeSeconds: state.simulationTimeSeconds,
+      bodyCount: advance.state.majorBodies.length,
+      simulationTimeSeconds: advance.simulationTimeSeconds,
       stepSeconds: PHYSICS_PROBE_STEP_SECONDS,
     };
   } finally {

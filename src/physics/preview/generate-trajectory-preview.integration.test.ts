@@ -9,6 +9,7 @@ import { createReboundSimulation } from '../rebound/rebound-simulation';
 import { ASTRONOMICAL_UNIT_METERS, createCircularSunEarthScenario } from '../scenarios/sun-earth';
 import { generateTrajectoryPreview } from './generate-trajectory-preview';
 import { ORBIT_PREVIEW_PROTOCOL_VERSION } from './schemas';
+import { createPreviewTestBody } from './test-helpers';
 
 const SOLAR_MASS_KG = 1.988_47e30;
 
@@ -28,13 +29,13 @@ function expectPositionClose(
 describe('真实 REBOUND 轨道预览', () => {
   it('按固定目标时刻输出有限 IAS15 轨迹', async () => {
     const scenario = createCircularSunEarthScenario();
-    const draft: BodyState = {
+    const draft: BodyState = createPreviewTestBody({
       id: 'draft-planet',
       massKg: 1e20,
       radiusMeters: 1_000,
       positionMeters: { x: ASTRONOMICAL_UNIT_METERS * 2, y: 0, z: 0 },
       velocityMetersPerSecond: { x: 0, y: 20_000, z: 0 },
-    };
+    });
     const result = await generateTrajectoryPreview(
       {
         version: ORBIT_PREVIEW_PROTOCOL_VERSION,
@@ -67,23 +68,40 @@ describe('真实 REBOUND 轨道预览', () => {
   });
 
   it.each([
-    ['太阳质量恒星', SOLAR_MASS_KG, 696_340_000],
-    ['5 倍太阳质量黑洞', 5 * SOLAR_MASS_KG, 14_766],
-  ])('%s 的首个轨迹点保持输入惯性坐标', async (_label, massKg, radiusMeters) => {
-    const reference: BodyState = {
+    {
+      label: '太阳质量恒星',
+      massKg: SOLAR_MASS_KG,
+      radiusMeters: 696_340_000,
+      collisionModel: 'stellar' as const,
+      momentOfInertiaFactor: 0.07,
+      materialLayers: [{ material: 'gas' as const, massFraction: 1 }],
+    },
+    {
+      label: '5 倍太阳质量黑洞',
+      massKg: 5 * SOLAR_MASS_KG,
+      radiusMeters: 14_766,
+      collisionModel: 'blackHole' as const,
+      momentOfInertiaFactor: null,
+      materialLayers: [],
+    },
+  ])('$label 的首个轨迹点保持输入惯性坐标', async (profile) => {
+    const reference: BodyState = createPreviewTestBody({
       id: 'reference-planet',
       massKg: 5.972_2e24,
       radiusMeters: 6_371_000,
       positionMeters: { x: -3e11, y: 1e11, z: -2e9 },
       velocityMetersPerSecond: { x: -4_000, y: 8_000, z: -20 },
-    };
-    const draft: BodyState = {
+    });
+    const draft: BodyState = createPreviewTestBody({
       id: 'draft-massive-body',
-      massKg,
-      radiusMeters,
+      massKg: profile.massKg,
+      radiusMeters: profile.radiusMeters,
       positionMeters: { x: 4e11, y: -2e11, z: 3e9 },
       velocityMetersPerSecond: { x: 1_234, y: -567, z: 89 },
-    };
+      collisionModel: profile.collisionModel,
+      momentOfInertiaFactor: profile.momentOfInertiaFactor,
+      materialLayers: profile.materialLayers,
+    });
 
     const result = await generateTrajectoryPreview(
       {

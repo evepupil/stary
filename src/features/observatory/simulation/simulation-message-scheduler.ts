@@ -23,8 +23,7 @@ export function createSimulationMessageScheduler(
   let disposed = false;
   let frameId: number | null = null;
 
-  const flush = () => {
-    frameId = null;
+  const flushBuffer = () => {
     if (disposed) {
       return;
     }
@@ -33,6 +32,19 @@ export function createSimulationMessageScheduler(
     if (flushed.message !== null) {
       options.applyMessage(flushed.message);
     }
+  };
+
+  const flush = () => {
+    frameId = null;
+    flushBuffer();
+  };
+
+  const flushSynchronously = () => {
+    if (frameId !== null) {
+      options.cancelFrame(frameId);
+      frameId = null;
+    }
+    flushBuffer();
   };
 
   return {
@@ -45,6 +57,15 @@ export function createSimulationMessageScheduler(
         frameId ??= options.requestFrame(flush);
         return;
       }
+      if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
+        if (buffer.stateMessage === null && frameId !== null) {
+          options.cancelFrame(frameId);
+          frameId = null;
+        }
+        options.applyMessage(message);
+        return;
+      }
+      flushSynchronously();
       options.applyMessage(message);
     },
     dispose() {

@@ -5,6 +5,7 @@ import {
   createCircularSunEarthScenario,
   createEllipticalSunEarthScenario,
 } from '../../../physics/scenarios/sun-earth';
+import { createTestBodyState } from '../../../test/fixtures/body-state';
 import { sampleOsculatingOrbit } from './orbit';
 
 function radiusFrom(point: { readonly x: number; readonly y: number; readonly z: number }): number {
@@ -71,20 +72,17 @@ describe('sampleOsculatingOrbit', () => {
   });
 
   it('径向运动没有可绘制的闭合轨道', () => {
-    const primary: BodyState = {
+    const primary = createTestBodyState({
       id: 'primary',
       massKg: 1e20,
-      radiusMeters: 1,
-      positionMeters: { x: 0, y: 0, z: 0 },
-      velocityMetersPerSecond: { x: 0, y: 0, z: 0 },
-    };
-    const body: BodyState = {
+    });
+    const body = createTestBodyState({
       ...primary,
       id: 'body',
       massKg: 1,
       positionMeters: { x: 10, y: 0, z: 0 },
       velocityMetersPerSecond: { x: 1, y: 0, z: 0 },
-    };
+    });
 
     expect(sampleOsculatingOrbit(primary, body, 1)).toBeNull();
   });

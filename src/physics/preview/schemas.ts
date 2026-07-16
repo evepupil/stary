@@ -3,7 +3,7 @@ import { z } from 'zod';
 import { JULIAN_DAY_SECONDS } from '../constants';
 import { bodyStatesSchema } from '../protocol/schemas';
 
-export const ORBIT_PREVIEW_PROTOCOL_VERSION = 1 as const;
+export const ORBIT_PREVIEW_PROTOCOL_VERSION = 3 as const;
 export const MIN_TRAJECTORY_PREVIEW_SAMPLE_COUNT = 2;
 export const MAX_TRAJECTORY_PREVIEW_SAMPLE_COUNT = 2_048;
 export const MAX_TRAJECTORY_PREVIEW_DURATION_SECONDS = 366 * JULIAN_DAY_SECONDS;
