@@ -34,6 +34,7 @@
 - 单元与物理集成测试命令为 `pnpm test`；它会直接运行固定 REBOUND WASM 的圆轨道、椭圆轨道和 1000 周期守恒测试，也会把固定 Collision WASM 与 TypeScript 参考结果逐字段对照。生产构建命令为 `pnpm build`。
 - 前端完整门禁为 `pnpm check`，依次运行格式、lint、类型、单测、生产构建和 Playwright 浏览器验收。首次在新环境运行前使用 `pnpm test:e2e:install` 安装 Chrome。
 - 浏览器验收也可单独运行 `pnpm test:e2e`。它覆盖非空画布像素、暂停、单步、倍率、恢复运行、手机抽屉和 WebGL2 真实回退。
+- 当前开发机通过远程显示会话工作。浏览器 E2E 可以因远程图形环境失败或直接跳过，且不阻塞提交与推送；必须如实记录未运行项、失败结果和环境原因，禁止把跳过或失败写成通过。其余格式、lint、类型、单测和生产构建门禁仍须通过，浏览器验收留到具备真实 GPU 显示链路的环境补跑。
 - 当前观测台性能采样命令为 `pnpm test:performance`。它构建生产包，通过短生命周期 Vite preview 覆盖桌面全景、桌面地球近景、桌面 WebGL2 地球近景和手机 WebGL2 地球近景；每个场景预热后采样三次、每次五秒，记录页面 RAF、实际场景帧、Worker state 和资源平台，完成后自动退出。
 - Collision WASM 固定构建命令为 `pnpm build:collision-wasm`；它使用锁定容器生成唯一的 `crates/stary-collision/dist/stary_collision.wasm`。完整固定门禁为 `pnpm verify:collision-wasm`，包含容器重建、Rust release 测试、输入与产物哈希、导出白名单和 token 生命周期。仅检查当前锁定产物使用 `pnpm check:collision-wasm`。
 - `pnpm build` 会先运行 Collision WASM 当前产物门禁，再检查生产包不含 source map，并验证正式 physics Worker、轨道预览 Worker、观测场景与 WebGPU/WebGL 渲染模块均已按需产出。生产包必须恰好包含一个锁定 REBOUND WASM 和一个锁定 Collision WASM；正式 physics Worker 引用两者，轨道预览 Worker 只能引用 REBOUND。两个产物分别按各自 `artifact-lock.json` 校验字节数和 SHA-256。
