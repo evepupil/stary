@@ -15,8 +15,11 @@ const runtime = new PhysicsWorkerRuntime({
   closeWorker: () => {
     workerScope.close();
   },
-  createSimulation: (bodies, initialTimeSeconds) =>
-    createReboundSimulation(bodies, { initialTimeSeconds }),
+  createSimulation: (bodies, initialTimeSeconds, options) =>
+    createReboundSimulation(bodies, {
+      initialTimeSeconds,
+      moveToCenterOfMass: options?.preserveReferenceFrame !== true,
+    }),
   postMessage: (message) => {
     workerScope.postMessage(message);
   },

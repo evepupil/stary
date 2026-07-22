@@ -15,6 +15,7 @@ const diagnostics = {
 } as const;
 
 class FakeScheduler implements PhysicsScheduler {
+  failNow = false;
   now = 0;
   nextTaskId = 1;
   readonly tasks = new Map<number, () => void>();
@@ -24,6 +25,9 @@ class FakeScheduler implements PhysicsScheduler {
   }
 
   nowMilliseconds(): number {
+    if (this.failNow) {
+      throw new Error('fake scheduler clock failure');
+    }
     return this.now;
   }
 
@@ -34,7 +38,7 @@ class FakeScheduler implements PhysicsScheduler {
     return taskId as unknown as ScheduledPhysicsTask;
   }
 
-  advanceAndRun(milliseconds: number): void {
+  async advanceAndRun(milliseconds: number): Promise<void> {
     this.elapse(milliseconds);
     const next = this.tasks.entries().next().value as [number, () => void] | undefined;
     if (next === undefined) {
@@ -42,6 +46,9 @@ class FakeScheduler implements PhysicsScheduler {
     }
     this.tasks.delete(next[0]);
     next[1]();
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
+    }
   }
 
   elapse(milliseconds: number): void {
@@ -50,6 +57,7 @@ class FakeScheduler implements PhysicsScheduler {
 }
 
 class FakeSimulation implements PhysicsSimulation {
+  clearPendingContactCount = 0;
   destroyCount = 0;
   failIntegration = false;
   failSnapshot = false;
@@ -60,6 +68,15 @@ class FakeSimulation implements PhysicsSimulation {
     initialTimeSeconds = 0,
   ) {
     this.timeSeconds = initialTimeSeconds;
+  }
+
+  advanceUntilEvent(targetTimeSeconds: number) {
+    this.integrateTo(targetTimeSeconds);
+    return { type: 'advanced' as const, timeSeconds: targetTimeSeconds };
+  }
+
+  clearPendingContact(): void {
+    this.clearPendingContactCount += 1;
   }
 
   destroy(): void {
@@ -241,7 +258,7 @@ describe('PhysicsWorkerRuntime', () => {
     await initialize(harness);
     await harness.runtime.receive(command(1, { type: 'start' }));
     await harness.runtime.receive(command(2, { type: 'pause' }));
-    harness.scheduler.advanceAndRun(10_000);
+    await harness.scheduler.advanceAndRun(10_000);
 
     expect(harness.simulation.timeSeconds).toBe(0);
     expect(harness.scheduler.tasks.size).toBe(0);
@@ -475,7 +492,7 @@ describe('PhysicsWorkerRuntime', () => {
     await initialize(harness);
     await harness.runtime.receive(command(1, { type: 'setTimeScale', timeScale: 3_600 }));
     await harness.runtime.receive(command(2, { type: 'start' }));
-    harness.scheduler.advanceAndRun(10_000);
+    await harness.scheduler.advanceAndRun(10_000);
 
     expect(harness.simulation.timeSeconds).toBe(36_000);
     expect(harness.scheduler.tasks.size).toBe(1);
@@ -485,6 +502,23 @@ describe('PhysicsWorkerRuntime', () => {
       requestedTargetSimulationTimeSeconds: 36_000,
       simulationTimeSeconds: 36_000,
     });
+  });
+
+  it('后台调度异常会返回 internalError 并安全暂停', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'start' }));
+    harness.scheduler.failNow = true;
+
+    await harness.scheduler.advanceAndRun(16);
+
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'internalError',
+      recoverable: false,
+      replyToSequence: null,
+    });
+    expect(harness.scheduler.tasks.size).toBe(0);
   });
 
   it('重复 start 保持运行并复用当前调度任务', async () => {
@@ -504,7 +538,7 @@ describe('PhysicsWorkerRuntime', () => {
     });
     expect(harness.messages.some((message) => message.type === 'error')).toBe(false);
 
-    harness.scheduler.advanceAndRun(1_000);
+    await harness.scheduler.advanceAndRun(1_000);
     expect(harness.simulation.timeSeconds).toBe(1);
   });
 
@@ -530,7 +564,7 @@ describe('PhysicsWorkerRuntime', () => {
     harness.simulation.timeSeconds = 1e20;
     await harness.runtime.receive(command(1, { type: 'start' }));
 
-    harness.scheduler.advanceAndRun(16);
+    await harness.scheduler.advanceAndRun(16);
 
     expect(harness.messages.at(-1)).toMatchObject({
       type: 'error',
@@ -547,7 +581,7 @@ describe('PhysicsWorkerRuntime', () => {
     await harness.runtime.receive(command(1, { type: 'setTimeScale', timeScale: MAX_TIME_SCALE }));
     await harness.runtime.receive(command(2, { type: 'start' }));
 
-    harness.scheduler.advanceAndRun(1_000);
+    await harness.scheduler.advanceAndRun(1_000);
 
     expect(harness.simulation.timeSeconds).toBe(86_400);
     expect(harness.messages.at(-1)).toMatchObject({
@@ -557,7 +591,7 @@ describe('PhysicsWorkerRuntime', () => {
       timeScale: 86_400,
     });
 
-    harness.scheduler.advanceAndRun(16);
+    await harness.scheduler.advanceAndRun(16);
 
     expect(harness.simulation.timeSeconds).toBeCloseTo(87_782.4, 8);
     expect(harness.messages.at(-1)).toMatchObject({
@@ -586,7 +620,7 @@ describe('PhysicsWorkerRuntime', () => {
     });
 
     await harness.runtime.receive(command(4, { type: 'start' }));
-    harness.scheduler.advanceAndRun(16);
+    await harness.scheduler.advanceAndRun(16);
 
     expect(harness.simulation.timeSeconds).toBeCloseTo(87_782.4, 8);
   });
@@ -640,7 +674,7 @@ describe('PhysicsWorkerRuntime', () => {
     await initialize(harness);
     harness.simulation.failIntegration = true;
     await harness.runtime.receive(command(1, { type: 'start' }));
-    harness.scheduler.advanceAndRun(1_000);
+    await harness.scheduler.advanceAndRun(1_000);
 
     expect(harness.scheduler.tasks.size).toBe(0);
     expect(harness.messages.at(-1)).toMatchObject({

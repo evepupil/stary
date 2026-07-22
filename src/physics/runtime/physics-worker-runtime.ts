@@ -1,5 +1,9 @@
 import { ZodError } from 'zod';
 
+import {
+  loadCollisionKernelWasm,
+  type CollisionKernelWasm,
+} from '../collisions/collision-kernel-wasm';
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from '../protocol/parse-message';
 import { createPhysicsStateFromSnapshot } from '../protocol/physics-state';
 import type { MainToWorkerMessage, PhysicsState, WorkerToMainMessage } from '../protocol/schemas';
@@ -13,6 +17,8 @@ import {
   type ScheduledPhysicsTask,
 } from './physics-scheduler';
 import type { CreatePhysicsSimulation, PhysicsSimulation } from './physics-simulation';
+import { CollisionTransactionError, resolveCollisionTransaction } from './collision-transaction';
+import { advancePhysicsStateToSnapshot, replacePhysicsStateAssets } from './passive-assets';
 
 type RuntimeRunState = 'initialized' | 'paused' | 'running';
 type WorkerErrorCode = Extract<WorkerToMainMessage, { type: 'error' }>['code'];
@@ -25,6 +31,7 @@ export interface PhysicsWorkerRuntimeOptions {
   readonly collisionKernelWasmUrl?: string;
   readonly closeWorker?: () => void;
   readonly createSimulation: CreatePhysicsSimulation;
+  readonly loadCollisionKernel?: (url: string | null) => Promise<CollisionKernelWasm>;
   readonly postMessage: (message: WorkerToMainMessage) => void;
   readonly scheduler?: PhysicsScheduler;
 }
@@ -40,15 +47,26 @@ function boundedErrorMessage(message: string): string {
   return message.slice(0, 1_024) || '未知物理运行时错误';
 }
 
+function isContactSetOverflow(error: unknown): boolean {
+  return (
+    error instanceof Error &&
+    'status' in error &&
+    (error as Error & { readonly status?: unknown }).status === -7
+  );
+}
+
 export class PhysicsWorkerRuntime {
   public readonly collisionKernelWasmUrl: string | null;
   readonly #closeWorker: () => void;
   readonly #createSimulation: CreatePhysicsSimulation;
   readonly #postMessage: (message: WorkerToMainMessage) => void;
   readonly #scheduler: PhysicsScheduler;
+  readonly #loadCollisionKernel: (() => Promise<CollisionKernelWasm>) | undefined;
   #activeRequestSequence: number | null = null;
   #commandGate: SessionSequenceGate | undefined;
   #bodyRevision = 0;
+  #collisionBatchSequence = 0;
+  #collisionKernel: CollisionKernelWasm | undefined;
   #disposed = false;
   #lastRealTimeMilliseconds: number | undefined;
   #nextResponseSequence = 0;
@@ -66,6 +84,15 @@ export class PhysicsWorkerRuntime {
     this.#createSimulation = options.createSimulation;
     this.#postMessage = options.postMessage;
     this.#scheduler = options.scheduler ?? browserPhysicsScheduler;
+    const providedCollisionLoader = options.loadCollisionKernel;
+    const collisionKernelWasmUrl = this.collisionKernelWasmUrl;
+    if (providedCollisionLoader !== undefined) {
+      this.#loadCollisionKernel = () => providedCollisionLoader(collisionKernelWasmUrl);
+    } else if (collisionKernelWasmUrl !== null) {
+      this.#loadCollisionKernel = () => loadCollisionKernelWasm({ url: collisionKernelWasmUrl });
+    } else {
+      this.#loadCollisionKernel = undefined;
+    }
   }
 
   receive(input: unknown): Promise<void> {
@@ -135,13 +162,13 @@ export class PhysicsWorkerRuntime {
         this.#start();
         break;
       case 'pause':
-        this.#pause();
+        await this.#pause();
         break;
       case 'step':
-        this.#step(message.stepSeconds);
+        await this.#step(message.stepSeconds);
         break;
       case 'setTimeScale':
-        this.#setTimeScale(message.timeScale);
+        await this.#setTimeScale(message.timeScale);
         break;
       case 'replaceBodies':
         await this.#replaceBodies(message);
@@ -159,6 +186,7 @@ export class PhysicsWorkerRuntime {
 
     try {
       this.#simulation = await this.#createSimulation(message.bodies, 0);
+      this.#collisionKernel = await this.#loadCollisionKernel?.();
       this.#physicsState = createPhysicsStateFromSnapshot(this.#simulation.snapshot());
       this.#runState = 'initialized';
       this.#send({ type: 'ready', replyToSequence: message.sequence, bodyRevision: 0 });
@@ -166,6 +194,7 @@ export class PhysicsWorkerRuntime {
       this.#runState = undefined;
       this.#simulation?.destroy();
       this.#simulation = undefined;
+      this.#collisionKernel = undefined;
       this.#sendError('initializationFailed', describeProtocolError(error), false);
       this.#disposed = true;
       this.#closeWorker();
@@ -191,12 +220,15 @@ export class PhysicsWorkerRuntime {
     }
   }
 
-  #pause(): void {
+  async #pause(): Promise<void> {
     if (this.#requireLiveSimulation() === undefined) {
       return;
     }
-    if (this.#runState === 'running' && !this.#advanceRunningTarget()) {
-      return;
+    if (this.#runState === 'running') {
+      const outcome = await this.#advanceRunningTarget();
+      if (outcome === 'failed') {
+        return;
+      }
     }
 
     this.#cancelScheduledSlice();
@@ -205,7 +237,7 @@ export class PhysicsWorkerRuntime {
     this.#sendStatus(this.#activeRequestSequence);
   }
 
-  #step(stepSeconds: number): void {
+  async #step(stepSeconds: number): Promise<void> {
     const simulation = this.#requireLiveSimulation();
     if (simulation === undefined) {
       return;
@@ -225,21 +257,18 @@ export class PhysicsWorkerRuntime {
       return;
     }
 
-    try {
-      simulation.integrateTo(targetTimeSeconds);
-      this.#runState = 'paused';
-      this.#sendState(this.#activeRequestSequence, targetTimeSeconds);
-    } catch (error) {
-      this.#failSafely('integrationFailed', describeProtocolError(error));
-    }
+    await this.#advanceToTarget(targetTimeSeconds, this.#activeRequestSequence);
   }
 
-  #setTimeScale(timeScale: number): void {
+  async #setTimeScale(timeScale: number): Promise<void> {
     if (this.#requireLiveSimulation() === undefined) {
       return;
     }
-    if (this.#runState === 'running' && !this.#advanceRunningTarget()) {
-      return;
+    if (this.#runState === 'running') {
+      const outcome = await this.#advanceRunningTarget();
+      if (outcome === 'failed') {
+        return;
+      }
     }
     this.#timeScale = timeScale;
     this.#sendStatus(this.#activeRequestSequence);
@@ -277,12 +306,24 @@ export class PhysicsWorkerRuntime {
     let candidateSimulation: PhysicsSimulation | undefined;
     let candidateState: PhysicsState | undefined;
     try {
-      candidateSimulation = await this.#createSimulation(message.bodies, simulationTimeSeconds);
+      candidateSimulation = await this.#createSimulation(message.bodies, simulationTimeSeconds, {
+        preserveReferenceFrame: true,
+      });
       if (candidateSimulation.timeSeconds !== simulationTimeSeconds) {
         throw new Error('候选物理模拟没有保留当前模拟时间');
       }
       const snapshot = candidateSimulation.snapshot();
-      candidateState = createPhysicsStateFromSnapshot(snapshot, this.#physicsState);
+      const previousState = this.#physicsState;
+      if (previousState === undefined) {
+        throw new Error('天体替换缺少当前物理状态');
+      }
+      candidateState = replacePhysicsStateAssets(
+        previousState,
+        snapshot,
+        previousState.tracers,
+        previousState.dustCohorts,
+        previousState.cumulativeCollisionLedger,
+      );
     } catch (error) {
       if (candidateSimulation !== undefined && candidateSimulation !== previousSimulation) {
         candidateSimulation.destroy();
@@ -331,29 +372,43 @@ export class PhysicsWorkerRuntime {
     }
     this.#scheduledTask = this.#scheduler.schedule(() => {
       this.#scheduledTask = undefined;
-      if (this.#runState !== 'running') {
-        return;
-      }
-      if (this.#advanceRunningTarget()) {
-        this.#scheduleNextSlice();
-      }
+      const operation = this.#operationQueue.then(() => this.#runScheduledSliceSafely());
+      this.#operationQueue = operation.catch(() => undefined);
     });
   }
 
-  #advanceRunningTarget(): boolean {
+  async #runScheduledSliceSafely(): Promise<void> {
+    try {
+      await this.#runScheduledSlice();
+    } catch (error) {
+      this.#failSafely('internalError', describeProtocolError(error));
+    }
+  }
+
+  async #runScheduledSlice(): Promise<void> {
     if (this.#runState !== 'running') {
-      return false;
+      return;
+    }
+    const outcome = await this.#advanceRunningTarget();
+    if (outcome === 'advanced') {
+      this.#scheduleNextSlice();
+    }
+  }
+
+  async #advanceRunningTarget(): Promise<'advanced' | 'collision' | 'failed'> {
+    if (this.#runState !== 'running') {
+      return 'failed';
     }
     const simulation = this.#requireLiveSimulation();
     if (simulation === undefined) {
-      return false;
+      return 'failed';
     }
 
     const previousRealTimeMilliseconds = this.#lastRealTimeMilliseconds;
     const measuredRealTimeMilliseconds = this.#scheduler.nowMilliseconds();
     if (previousRealTimeMilliseconds === undefined) {
       this.#lastRealTimeMilliseconds = measuredRealTimeMilliseconds;
-      return true;
+      return 'advanced';
     }
     const currentRealTimeMilliseconds = Math.max(
       previousRealTimeMilliseconds,
@@ -365,7 +420,7 @@ export class PhysicsWorkerRuntime {
       elapsedRealSeconds * SIMULATION_SECONDS_PER_REAL_SECOND_AT_1X * this.#timeScale;
     if (!Number.isFinite(requestedAdvanceSeconds)) {
       this.#failSafely('integrationFailed', '时间倍率产生了超出有限数范围的目标时间');
-      return false;
+      return 'failed';
     }
     const advanceSeconds = Math.min(
       requestedAdvanceSeconds,
@@ -383,26 +438,130 @@ export class PhysicsWorkerRuntime {
     const nextTimeSeconds = simulation.timeSeconds + advanceSeconds;
     if (!Number.isFinite(nextTimeSeconds)) {
       this.#failSafely('integrationFailed', '时间推进产生了超出有限数范围的目标时间');
-      return false;
+      return 'failed';
     }
     if (nextTimeSeconds <= simulation.timeSeconds) {
       if (requestedAdvanceSeconds > 0) {
         this.#failSafely('integrationFailed', '运行片段小于当前模拟时间的可表示精度');
-        return false;
+        return 'failed';
       }
-      return true;
+      return 'advanced';
     }
 
+    const outcome = await this.#advanceToTarget(nextTimeSeconds, null);
+    if (outcome === 'advanced' && reducedTimeScale) {
+      this.#sendStatus(null);
+    }
+    return outcome;
+  }
+
+  async #advanceToTarget(
+    targetTimeSeconds: number,
+    replyToSequence: number | null,
+  ): Promise<'advanced' | 'collision' | 'failed'> {
+    const simulation = this.#requireLiveSimulation();
+    const previousState = this.#physicsState;
+    if (simulation === undefined || previousState === undefined) {
+      return 'failed';
+    }
+    const previousTimeSeconds = simulation.timeSeconds;
+    let advanceResult;
     try {
-      simulation.integrateTo(nextTimeSeconds);
-      this.#sendState(null, nextTimeSeconds);
-      if (reducedTimeScale) {
-        this.#sendStatus(null);
-      }
-      return true;
+      advanceResult = simulation.advanceUntilEvent(targetTimeSeconds);
     } catch (error) {
-      this.#failSafely('integrationFailed', describeProtocolError(error));
-      return false;
+      this.#failSafely(
+        isContactSetOverflow(error) ? 'collisionContactSetOverflow' : 'integrationFailed',
+        describeProtocolError(error),
+      );
+      return 'failed';
+    }
+
+    if (advanceResult.type === 'advanced') {
+      try {
+        this.#physicsState = advancePhysicsStateToSnapshot(
+          previousState,
+          simulation.snapshot(),
+          advanceResult.timeSeconds - previousTimeSeconds,
+        );
+        if (this.#runState !== 'running') {
+          this.#runState = 'paused';
+        }
+        this.#sendCurrentState(replyToSequence, targetTimeSeconds);
+        return 'advanced';
+      } catch (error) {
+        this.#failSafely('integrationFailed', describeProtocolError(error));
+        return 'failed';
+      }
+    }
+
+    let contactState: PhysicsState;
+    try {
+      contactState = advancePhysicsStateToSnapshot(
+        previousState,
+        advanceResult.snapshot,
+        advanceResult.timeSeconds - previousTimeSeconds,
+      );
+    } catch (error) {
+      this.#failSafely('collisionResolutionFailed', describeProtocolError(error));
+      return 'failed';
+    }
+    this.#physicsState = contactState;
+    const collisionKernel = this.#collisionKernel;
+    if (collisionKernel === undefined) {
+      this.#runState = 'paused';
+      this.#cancelScheduledSlice();
+      this.#lastRealTimeMilliseconds = undefined;
+      this.#sendCurrentState(null, advanceResult.timeSeconds);
+      this.#sendError('collisionResolutionFailed', 'Collision WASM 尚未加载', true);
+      return 'failed';
+    }
+
+    const nextCollisionBatchSequence = this.#collisionBatchSequence + 1;
+    try {
+      const transaction = await resolveCollisionTransaction({
+        collisionBatchSequence: nextCollisionBatchSequence,
+        contactPairs: advanceResult.pairs,
+        contactState,
+        contactTimeSeconds: advanceResult.timeSeconds,
+        createSimulation: this.#createSimulation,
+        kernel: collisionKernel,
+      });
+      const bodyRevisionBefore = this.#bodyRevision;
+      this.#simulation = transaction.simulation;
+      this.#physicsState = transaction.state;
+      this.#bodyRevision += 1;
+      this.#collisionBatchSequence = nextCollisionBatchSequence;
+      this.#runState = 'paused';
+      this.#cancelScheduledSlice();
+      this.#lastRealTimeMilliseconds = undefined;
+      simulation.destroy();
+      this.#send({
+        type: 'collisionBatchResolved',
+        replyToSequence,
+        collisionBatchSequence: this.#collisionBatchSequence,
+        requestedTargetSimulationTimeSeconds: targetTimeSeconds,
+        contactTimeSeconds: advanceResult.timeSeconds,
+        runState: 'paused',
+        bodyRevisionBefore,
+        bodyRevisionAfter: this.#bodyRevision,
+        events: [...transaction.events],
+        ledgerDelta: [...transaction.ledgerDelta],
+        state: transaction.state,
+      });
+      return 'collision';
+    } catch (error) {
+      this.#runState = 'paused';
+      this.#cancelScheduledSlice();
+      this.#lastRealTimeMilliseconds = undefined;
+      if (error instanceof CollisionTransactionError) {
+        this.#physicsState = error.contactState;
+        this.#sendCurrentState(null, advanceResult.timeSeconds);
+        this.#sendError(error.code, error.message, true);
+      } else {
+        this.#sendCurrentState(null, advanceResult.timeSeconds);
+        this.#sendError('collisionResolutionFailed', describeProtocolError(error), true);
+      }
+      return 'failed';
     }
   }
 
@@ -417,14 +576,15 @@ export class PhysicsWorkerRuntime {
     }
   }
 
-  #sendState(replyToSequence: number | null, requestedTargetSimulationTimeSeconds: number): void {
-    const simulation = this.#requireLiveSimulation();
-    if (simulation === undefined) {
+  #sendCurrentState(
+    replyToSequence: number | null,
+    requestedTargetSimulationTimeSeconds: number,
+  ): void {
+    const state = this.#physicsState;
+    if (state === undefined) {
+      this.#failSafely('invalidState', '物理状态尚未成功初始化');
       return;
     }
-    const snapshot = simulation.snapshot();
-    const state = createPhysicsStateFromSnapshot(snapshot, this.#physicsState);
-    this.#physicsState = state;
     this.#send({
       type: 'state',
       replyToSequence,

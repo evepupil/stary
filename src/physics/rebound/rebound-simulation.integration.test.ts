@@ -13,7 +13,7 @@ import {
   createCircularSunEarthScenario,
   createEllipticalSunEarthScenario,
 } from '../scenarios/sun-earth';
-import { createReboundSimulation, type ReboundSimulation } from './rebound-simulation';
+import { createReboundSimulation, type ReboundEventSimulation } from './rebound-simulation';
 
 const ORBIT_RELATIVE_TOLERANCE = 1e-9;
 const RADIUS_RELATIVE_TOLERANCE = 1e-10;
@@ -73,7 +73,7 @@ function expectPhysicalMetadata(actual: BodyState, expected: BodyState): void {
 async function loadSimulation(
   bodies: readonly BodyState[],
   initialTimeSeconds = 0,
-): Promise<ReboundSimulation> {
+): Promise<ReboundEventSimulation> {
   return createReboundSimulation(bodies, {
     initialTimeSeconds,
     locateFile: () => reboundWasmPath,
@@ -97,11 +97,14 @@ class IntegrationScheduler implements PhysicsScheduler {
     return 1 as unknown as ScheduledPhysicsTask;
   }
 
-  advanceAndRun(milliseconds: number): void {
+  async advanceAndRun(milliseconds: number): Promise<void> {
     this.now += milliseconds;
     const task = this.nextTask;
     this.nextTask = undefined;
     task?.();
+    for (let index = 0; index < 6; index += 1) {
+      await Promise.resolve();
+    }
   }
 }
 
@@ -134,7 +137,7 @@ async function runWithTimeScale(timeScale: number, realMilliseconds: number) {
   await runtime.receive(message(0, { type: 'initialize', bodies: scenario.bodies }));
   await runtime.receive(message(1, { type: 'setTimeScale', timeScale }));
   await runtime.receive(message(2, { type: 'start' }));
-  scheduler.advanceAndRun(realMilliseconds);
+  await scheduler.advanceAndRun(realMilliseconds);
   const state = messages.findLast(
     (candidate): candidate is Extract<WorkerToMainMessage, { type: 'state' }> =>
       candidate.type === 'state',

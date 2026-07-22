@@ -15,8 +15,8 @@ M3 保持四条硬边界：
 
 - M3 Task 1 已建立 `src/physics/collisions/`，包含来源锁、接触量、破坏标度、分类、材料、候选门禁和 event-total 守恒账本。
 - M3 Task 2 已把正式协议与预览协议升级到 v3，`BodyState` 携带材料、自转、惯量和碰撞模型。
-- M3 Task 3 已交付事件式 REBOUND C 桥与 TypeScript 适配器；正式 `PhysicsWorkerRuntime` 仍在等待 Task 5 原子事务，因此当前运行循环继续调用 `integrateTo(targetTime)`。
-- M3 Task 4 已交付固定 Rust/WASM 碰撞内核、TypeScript 参考实现与严格业务 envelope；正式 Worker 已携带 Collision WASM 产物地址，调用内核、候选复算和原子提交仍归 Task 5。
+- M3 Task 3 已交付事件式 REBOUND C 桥与 TypeScript 适配器，Task 5 已让正式 `PhysicsWorkerRuntime` 的单步与连续运行统一调用 `advanceUntilEvent(targetTime)`。
+- M3 Task 4 已交付固定 Rust/WASM 碰撞内核、TypeScript 参考实现与严格业务 envelope；Task 5 已接通内核加载、同刻批次、候选复算和原子提交。
 - REBOUND C 桥已经提供稳定 token 句柄、IAS15 推进、连续接触、同刻 pair、快照、能量和角动量导出。
 - `replaceBodies` 已具备候选实例、首帧校验、原子切换、修订冲突和失败回滚。
 - 轨道预览已经用扫掠线段识别有限采样间的碰撞风险。这条路径只负责预警，无法保证捕获 IAS15 步内的弯曲接触。
@@ -294,7 +294,7 @@ v3 一次性升级以下公共结构：
 
 TypeScript 严格 schema 会拒绝版本错误、共享参与体、重复 ID、容量不足、额外字段和未通过守恒的成功结果。真实 Collision WASM 与 TypeScript 参考实现的对照覆盖 merge、hit-and-run、灾难性破坏、稳定批次排序和黑洞吞噬；定向矩阵另覆盖部分吸积和结构化失败。3 个定向 Vitest 文件共 16 项测试通过。完整 `pnpm check` 通过 61 个 Vitest 文件共 408 项测试、生产双 WASM 构建和 28 条 Playwright 浏览器验收。
 
-### Task 5：接入正式 Worker 原子碰撞事务
+### Task 5：接入正式 Worker 原子碰撞事务（已完成）
 
 - `PhysicsSimulation` 改为事件式推进，单步和连续运行统一处理。
 - 候选碰撞结果通过 Zod、守恒、容量和首帧门禁后原子切换实例。
@@ -304,6 +304,8 @@ TypeScript 严格 schema 会拒绝版本错误、共享参与体、重复 ID、�
 - controller 使用 `replyToSequence` 完成 `start`、`step` 等请求；单步碰撞以提前暂停结果正常结束，不能等待原目标直至超时。
 
 完成门槛：任何失败都不产生半提交；碰撞后的主要碎块、tracer 和 dust cohort 能继续推进；旧 state 不能覆盖碰撞结果；资源无泄漏。
+
+完成依据：正式 runtime 在 Worker 初始化期间加载固定 Collision WASM，单步与连续运行统一停在 REBOUND 最早接触。互不共享天体的 pair 整批求解，共享天体的多体接触保留接触态并明确拒绝。Rust 结果通过严格 schema、原始参与体绑定、经典账本复算、黑洞独立账本和候选 REBOUND 首帧验收后一次切换；候选失败会销毁新实例并保留旧接触实例与修订号。tracer 和 dust cohort 使用主要天体引力的 velocity Verlet 分步推进，诊断与省略反作用会在每步刷新。格式、lint、类型、65 个 Vitest 文件共 421 项测试、生产构建和真实双 WASM 集成链通过。远程显示环境中的 WSL Chrome 150 没有可用 WebGPU 适配器，WebGL2 使用 SwiftShader，两次独立运行的 28 条 Playwright 都因图形警告和 14–18 FPS 失败；该结果按项目远程开发约定列为非阻塞项，等待真实 GPU 环境补跑。
 
 ### Task 6：交付主要碎块、tracer 与碰撞观察界面
 

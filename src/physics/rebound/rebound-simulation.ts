@@ -10,6 +10,11 @@ import {
   type PhysicsDiagnostics,
 } from '../protocol/schemas';
 import type {
+  PhysicsAdvanceResult,
+  PhysicsContactPair,
+  PhysicsSimulation,
+} from '../runtime/physics-simulation';
+import type {
   ReboundEmscriptenModule,
   ReboundHandle,
   ReboundModuleFactory,
@@ -45,6 +50,7 @@ export interface CreateReboundSimulationOptions {
   readonly initialTimestepSeconds?: number;
   readonly locateFile?: ReboundModuleOptions['locateFile'];
   readonly moduleFactory?: ReboundModuleFactory;
+  readonly moveToCenterOfMass?: boolean;
   readonly wasmBinary?: ReboundWasmBinary;
 }
 
@@ -53,22 +59,8 @@ export interface ReboundSnapshot {
   readonly diagnostics: PhysicsDiagnostics;
 }
 
-export interface ReboundContactPair {
-  readonly firstBodyId: string;
-  readonly secondBodyId: string;
-}
-
-export type ReboundAdvanceResult =
-  | {
-      readonly type: 'advanced';
-      readonly timeSeconds: number;
-    }
-  | {
-      readonly type: 'contact';
-      readonly timeSeconds: number;
-      readonly pairs: readonly ReboundContactPair[];
-      readonly snapshot: ReboundSnapshot;
-    };
+export type ReboundContactPair = PhysicsContactPair;
+export type ReboundAdvanceResult = PhysicsAdvanceResult;
 
 export interface ReboundSimulation {
   readonly timeSeconds: number;
@@ -77,9 +69,13 @@ export interface ReboundSimulation {
   destroy(): void;
 }
 
-export interface ReboundEventSimulation extends ReboundSimulation {
-  advanceUntilEvent(targetTimeSeconds: number): ReboundAdvanceResult;
-  clearPendingContact(): void;
+export interface ReboundEventSimulation extends ReboundSimulation, PhysicsSimulation {}
+
+export class ReboundContactAdvanceError extends Error {
+  public constructor(public readonly status: number) {
+    super(`advanceUntilEvent 失败，REBOUND 状态码为 ${String(status)}`);
+    this.name = 'ReboundContactAdvanceError';
+  }
 }
 
 function finiteNumber(label: string, value: number): number {
@@ -226,7 +222,7 @@ class ReboundSimulationAdapter implements ReboundSimulation {
       return { type: 'advanced', timeSeconds };
     }
     if (status !== 1) {
-      throw new Error(`advanceUntilEvent 失败，REBOUND 状态码为 ${String(status)}`);
+      throw new ReboundContactAdvanceError(status);
     }
 
     try {
@@ -476,7 +472,9 @@ export async function createReboundSimulation(
       'setIntegrator(ias15)',
       module._stary_reb_set_integrator(handle, IAS15_INTEGRATOR_CODE, initialTimestepSeconds),
     );
-    checkStatus('moveToCenterOfMass', module._stary_reb_move_to_com(handle));
+    if (options.moveToCenterOfMass !== false) {
+      checkStatus('moveToCenterOfMass', module._stary_reb_move_to_com(handle));
+    }
 
     return new ReboundSimulationAdapter(module, handle, validatedBodies, initialTimeSeconds);
   } catch (error) {

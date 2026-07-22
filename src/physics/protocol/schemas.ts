@@ -1,6 +1,7 @@
 import { z } from 'zod';
 
 import { MAX_COLLISION_MAJOR_BODIES } from '../collisions/model-sources';
+import { blackHoleAccretionLedgerSchema } from '../collisions/kernel-schemas';
 import { collisionLedgerSchema } from '../collisions/schemas';
 import {
   advanceCollisionLedgerSummary,
@@ -150,7 +151,7 @@ const collisionBatchResolvedResponseSchema = workerMessageEnvelopeSchema
     bodyRevisionBefore: bodyRevisionSchema,
     bodyRevisionAfter: positiveBodyRevisionSchema,
     events: z.array(collisionEventSchema).min(1),
-    ledgerDelta: z.array(collisionLedgerSchema).min(1),
+    ledgerDelta: z.array(z.union([collisionLedgerSchema, blackHoleAccretionLedgerSchema])).min(1),
     state: physicsStateSchema,
   })
   .superRefine((message, context) => {

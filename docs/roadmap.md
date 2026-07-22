@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M2 真实画面已通过验收。M3 Task 1 到 Task 4 已完成科学模型底座、协议 v3、场景物理资料、REBOUND 连续接触桥和固定 Rust/WASM 碰撞内核，下一步执行 Task 5 的正式 Worker 原子碰撞事务。
+M2 真实画面已通过验收。M3 Task 1 到 Task 5 已完成；正式 Worker 原子碰撞事务、同刻批次、候选 REBOUND 原子切换、失败回滚与被动资产推进已经交付，下一步进入 Task 6 的碰撞画面与观察界面。格式、lint、类型、421 项 Vitest 和生产构建通过；远程显示环境中的浏览器 E2E 按项目约定列为非阻塞项，并保留失败记录等待真实 GPU 环境补跑。
 
 ## Milestones
 
@@ -43,11 +43,12 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 4 已完成科学模型底�
 - M3 Task 2：已完成。正式协议与预览协议升级到 v3，增加精确回执、完整物理状态、碰撞批次与双层诊断；太阳系和六类创建预设补齐材料、自转、惯量及碰撞模型。完整门禁通过 57 个 Vitest 文件共 390 项测试、生产构建和 28 条 Playwright。
 - M3 Task 3：已完成。固定 REBOUND C 桥交付 IAS15 连续接触、checkpoint 回放、最早时刻、同刻 pair、幂等确认和 token 句柄；26 条原型测试、58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright 全部通过。
 - M3 Task 4：已完成。固定 Rust 1.96.0 crate 交付工程确定性 v1 的 EDACM/Genda 分类、残体重建、材料路由、黑洞吞噬和参与体局部 event-total 账本；C ABI 使用单调 token 管理有界 JSON 缓冲区，真实 Collision WASM 与 TypeScript 参考实现完成跨语言对照；完整门禁通过 61 个 Vitest 文件共 408 项测试、生产双 WASM 构建和 28 条 Playwright。
+- M3 Task 5：已完成。正式 Worker 事件推进、同刻批次、Collision WASM 严格入口、候选 REBOUND 原子切换、失败回滚与 tracer/dust cohort 引力推进已交付。格式、lint、类型、65 个 Vitest 文件共 421 项测试、生产构建和真实双 WASM 集成链通过；远程图形环境导致的 Playwright 失败按项目约定记录为非阻塞项。
 
 ## Next Recommended Steps
 
-1. 执行 M3 Task 5，把连续接触与 Rust 候选接入正式 Worker 原子碰撞事务。
-2. 随后交付主要碎块、tracer、dust cohort 和碰撞观察界面。
+1. 执行 M3 Task 6，把主要碎块、tracer、dust cohort 和碰撞事件接入正式画面与观察界面。
+2. 在具备真实 GPU 显示链路的环境补跑 28 条 Playwright 真实画布验收，更新浏览器证据。
 
 ## Inbox
 
@@ -130,3 +131,4 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 4 已完成科学模型底�
 - 2026-07-16：完成 M3 Task 2；正式与预览协议升级到 v3，太阳系和创建预设补齐碰撞资料，下一步进入 Task 3 连续接触桥。
 - 2026-07-16：完成 M3 Task 3；交付 REBOUND 连续接触、最早接触时刻、同刻 pair、checkpoint 回滚、资源预算和固定产物锁，下一步进入 Task 4 Rust/WASM 碰撞内核。
 - 2026-07-16：完成 M3 Task 4；交付固定 Rust/WASM 碰撞内核、工程确定性残体重建、黑洞吞噬、跨语言对照、C ABI 所有权和双 WASM 生产产物门禁，下一步进入 Task 5 正式 Worker 原子碰撞事务。
+- 2026-07-22：完成 M3 Task 5；交付正式 Worker 原子碰撞事务、同刻批次、候选切换、失败回滚和被动资产推进。格式、lint、类型、421 项 Vitest、生产双 WASM 构建和真实双 WASM 集成链通过；远程图形环境中的 28 条 Playwright 失败按项目约定列为非阻塞项，等待真实 GPU 环境补跑。

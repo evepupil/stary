@@ -14,8 +14,27 @@ export interface CollisionLedgerSummaryLike {
   readonly resolvedEventCount: number;
 }
 
-export interface CollisionLedgerDeltaLike {
-  readonly dissipation: CollisionDissipationSummary;
+export type CollisionLedgerDeltaLike =
+  | {
+      readonly dissipation: CollisionDissipationSummary;
+    }
+  | {
+      readonly relativeKineticEnergy: {
+        readonly radiationJoules: number;
+      };
+    };
+
+export function collisionLedgerDissipation(
+  ledger: CollisionLedgerDeltaLike,
+): CollisionDissipationSummary {
+  return 'dissipation' in ledger
+    ? ledger.dissipation
+    : {
+        heatJoules: 0,
+        deformationJoules: 0,
+        fractureJoules: 0,
+        radiationJoules: ledger.relativeKineticEnergy.radiationJoules,
+      };
 }
 
 export function createEmptyCollisionLedgerSummary(): CollisionLedgerSummaryLike {
@@ -37,7 +56,7 @@ export function advanceCollisionLedgerSummary(
   const sumField = (field: keyof CollisionDissipationSummary): number =>
     compensatedSum([
       previous.accumulatedDissipation[field],
-      ...ledgerDelta.map((ledger) => ledger.dissipation[field]),
+      ...ledgerDelta.map((ledger) => collisionLedgerDissipation(ledger)[field]),
     ]);
 
   return {
