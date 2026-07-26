@@ -6,7 +6,7 @@
 
 ## Current Phase
 
-M2 真实画面已通过验收。M3 Task 1 到 Task 5 已完成；正式 Worker 原子碰撞事务、同刻批次、候选 REBOUND 原子切换、失败回滚与被动资产推进已经交付，下一步进入 Task 6 的碰撞画面与观察界面。格式、lint、类型、421 项 Vitest 和生产构建通过；远程显示环境中的浏览器 E2E 按项目约定列为非阻塞项，并保留失败记录等待真实 GPU 环境补跑。
+M2 真实画面已通过验收。M3 Task 1 到 Task 6 已完成；碰撞画面与观察界面已经交付——主要碎块进入目录、选择与轨道，tracer、dust cohort 和零质量视觉碎屑有界渲染，碰撞事件面板显示分类、模型范围、接触量、物质去向与守恒账本，桌面与手机都能检查事件并继续模拟。下一步进入 Task 7 的 M3 综合验收。格式、lint、类型、453 项 Vitest 和生产构建通过；浏览器 E2E 按项目约定列为非阻塞项，等待真实 GPU 环境补跑。
 
 ## Milestones
 
@@ -44,11 +44,12 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 5 已完成；正式 Worker 
 - M3 Task 3：已完成。固定 REBOUND C 桥交付 IAS15 连续接触、checkpoint 回放、最早时刻、同刻 pair、幂等确认和 token 句柄；26 条原型测试、58 个 Vitest 文件共 392 项测试、生产构建和 28 条 Playwright 全部通过。
 - M3 Task 4：已完成。固定 Rust 1.96.0 crate 交付工程确定性 v1 的 EDACM/Genda 分类、残体重建、材料路由、黑洞吞噬和参与体局部 event-total 账本；C ABI 使用单调 token 管理有界 JSON 缓冲区，真实 Collision WASM 与 TypeScript 参考实现完成跨语言对照；完整门禁通过 61 个 Vitest 文件共 408 项测试、生产双 WASM 构建和 28 条 Playwright。
 - M3 Task 5：已完成。正式 Worker 事件推进、同刻批次、Collision WASM 严格入口、候选 REBOUND 原子切换、失败回滚与 tracer/dust cohort 引力推进已交付。格式、lint、类型、65 个 Vitest 文件共 421 项测试、生产构建和真实双 WASM 集成链通过；远程图形环境导致的 Playwright 失败按项目约定记录为非阻塞项。
+- M3 Task 6：已完成。主要碎块进入正式目录、选择、轨道和渲染原点；tracer 与 dust cohort 读取正式状态并用有界 Points 渲染；visual debris 使用零质量确定性粒子池，WebGPU/WebGL2 预算不同但主要碎块一致；碰撞事件面板显示分类、模型范围、反推接触速度、角度、Q_R/Q*、物质去向与守恒账本，桌面浮层与手机抽屉都能检查并继续模拟。格式、lint、类型、68 个 Vitest 文件共 453 项测试和生产双 WASM 构建通过；浏览器验收留待真实 GPU 环境补跑。
 
 ## Next Recommended Steps
 
-1. 执行 M3 Task 6，把主要碎块、tracer、dust cohort 和碰撞事件接入正式画面与观察界面。
-2. 在具备真实 GPU 显示链路的环境补跑 28 条 Playwright 真实画布验收，更新浏览器证据。
+1. 执行 M3 Task 7 综合验收：覆盖六类碰撞结果、失败回滚、同刻接触、容量上限、确定性重跑和双后端真实画布，记录生产包与性能。
+2. 在具备真实 GPU 显示链路的环境补跑 Playwright 真实画布验收（含 Task 6 新增的碰撞画面与事件面板流程），更新浏览器证据。
 
 ## Inbox
 
@@ -132,3 +133,4 @@ M2 真实画面已通过验收。M3 Task 1 到 Task 5 已完成；正式 Worker 
 - 2026-07-16：完成 M3 Task 3；交付 REBOUND 连续接触、最早接触时刻、同刻 pair、checkpoint 回滚、资源预算和固定产物锁，下一步进入 Task 4 Rust/WASM 碰撞内核。
 - 2026-07-16：完成 M3 Task 4；交付固定 Rust/WASM 碰撞内核、工程确定性残体重建、黑洞吞噬、跨语言对照、C ABI 所有权和双 WASM 生产产物门禁，下一步进入 Task 5 正式 Worker 原子碰撞事务。
 - 2026-07-22：完成 M3 Task 5；交付正式 Worker 原子碰撞事务、同刻批次、候选切换、失败回滚和被动资产推进。格式、lint、类型、421 项 Vitest、生产双 WASM 构建和真实双 WASM 集成链通过；远程图形环境中的 28 条 Playwright 失败按项目约定列为非阻塞项，等待真实 GPU 环境补跑。
+- 2026-07-26：完成 M3 Task 6；交付被动资产有界渲染层、零质量视觉碎屑粒子池、碰撞残体目录命名和碰撞事件检查面板，桌面与手机都能检查事件并继续模拟。格式、lint、类型、453 项 Vitest 和生产双 WASM 构建通过；浏览器验收按约定留待真实 GPU 环境，下一步进入 Task 7 综合验收。
