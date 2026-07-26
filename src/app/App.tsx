@@ -1,18 +1,20 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 
-import { Activity, ListTree, Maximize2, RotateCcw, X } from 'lucide-react';
+import { Activity, ListTree, Maximize2, RotateCcw, Sparkles, X } from 'lucide-react';
 
+import type { BodyState } from '../physics/protocol/schemas';
 import { CreationModeSwitcher, CreationPanel, useBodyCreation } from '../features/creation';
 import { BodyEditingPanel, useBodyEditing } from '../features/editing';
 import { BodyDirectory } from '../features/observatory/components/BodyDirectory';
 import { BodyInspector } from '../features/observatory/components/BodyInspector';
+import { CollisionEventPanel } from '../features/observatory/components/CollisionEventPanel';
 import { ObservatoryHeader } from '../features/observatory/components/ObservatoryHeader';
 import { TimeControls } from '../features/observatory/components/TimeControls';
 import '../features/observatory/observatory.css';
 import { UniverseViewport, type RendererBackend } from '../features/observatory/rendering';
 import { formatSimulationTime, useUniverseSimulation } from '../features/observatory/simulation';
 
-type MobilePanel = 'bodies' | 'details' | null;
+type MobilePanel = 'bodies' | 'collision' | 'details' | null;
 
 export function App() {
   const simulation = useUniverseSimulation();
@@ -22,7 +24,9 @@ export function App() {
   const [selectedBodyId, setSelectedBodyId] = useState<string | null>('earth');
   const [focusedBodyId, setFocusedBodyId] = useState<string | null>(null);
   const [viewportKey, setViewportKey] = useState(0);
+  const [collisionPanelDismissed, setCollisionPanelDismissed] = useState(false);
   const restoreDeleteActionFocusRef = useRef(false);
+  const handledCollisionBatchSequenceRef = useRef(0);
   const creation = useBodyCreation({
     simulation,
     onCommitted: (bodyId) => {
@@ -56,6 +60,43 @@ export function App() {
     }
   }, [editing.active, editing.operation, simulation.commandPending]);
 
+  const latestCollisionBatch = simulation.latestCollisionBatch;
+  const simulationBodies = simulation.bodies;
+  useEffect(() => {
+    if (latestCollisionBatch === null) {
+      handledCollisionBatchSequenceRef.current = 0;
+      return;
+    }
+    if (latestCollisionBatch.collisionBatchSequence === handledCollisionBatchSequenceRef.current) {
+      return;
+    }
+    handledCollisionBatchSequenceRef.current = latestCollisionBatch.collisionBatchSequence;
+    setCollisionPanelDismissed(false);
+    setMobilePanel('collision');
+
+    const remnantIds = new Set(
+      latestCollisionBatch.events.flatMap((event) => event.majorRemnantIds),
+    );
+    let largestRemnant: BodyState | null = null;
+    for (const body of simulationBodies) {
+      if (
+        remnantIds.has(body.id) &&
+        (largestRemnant === null || body.massKg > largestRemnant.massKg)
+      ) {
+        largestRemnant = body;
+      }
+    }
+    if (largestRemnant !== null) {
+      const remnantId = largestRemnant.id;
+      setSelectedBodyId(remnantId);
+      setFocusedBodyId((current) =>
+        current !== null && !simulationBodies.some((body) => body.id === current)
+          ? remnantId
+          : current,
+      );
+    }
+  }, [latestCollisionBatch, simulationBodies]);
+
   const effectiveSelectedBodyId = simulation.bodies.some((body) => body.id === selectedBodyId)
     ? selectedBodyId
     : (simulation.bodies[0]?.id ?? null);
@@ -71,6 +112,12 @@ export function App() {
   const simulationTime = formatSimulationTime(simulation.simulationTimeSeconds);
   const viewMode = effectiveFocusedBodyId === null ? 'overview' : 'focus';
 
+  const collisionPanelVisible =
+    latestCollisionBatch !== null &&
+    !collisionPanelDismissed &&
+    !editing.active &&
+    creation.mode === 'observe';
+
   const selectBody = (bodyId: string) => {
     if (editing.active) {
       return;
@@ -78,6 +125,16 @@ export function App() {
     setSelectedBodyId(bodyId);
     setFocusedBodyId(bodyId);
     setMobilePanel('details');
+  };
+
+  const dismissCollisionPanel = () => {
+    setCollisionPanelDismissed(true);
+    setMobilePanel((current) => (current === 'collision' ? null : current));
+  };
+
+  const continueAfterCollision = () => {
+    dismissCollisionPanel();
+    void simulation.start().catch(() => undefined);
   };
 
   const showOverview = () => {
@@ -104,6 +161,9 @@ export function App() {
       data-editing-phase={editing.active ? editing.phase : 'inactive'}
       data-body-revision={simulation.bodyRevision}
       data-body-snapshot-time-seconds={simulation.bodySnapshotSimulationTimeSeconds}
+      data-collision-batch-sequence={latestCollisionBatch?.collisionBatchSequence ?? 0}
+      data-collision-event-count={latestCollisionBatch?.events.length ?? 0}
+      data-collision-panel-open={collisionPanelVisible}
       data-simulation-time-seconds={simulation.simulationTimeSeconds}
       data-view-mode={viewMode}
       data-worker-state-sequence={simulation.latestStateSequence}
@@ -112,6 +172,7 @@ export function App() {
         bodies={simulation.bodies}
         className="universe-viewport"
         creationState={creation.mode === 'create' ? creation.overlayState : editing.overlayState}
+        dustCohorts={simulation.physicsState?.dustCohorts}
         focusBodyId={effectiveFocusedBodyId}
         key={viewportKey}
         onBackendChange={(nextBackend) => {
@@ -125,6 +186,7 @@ export function App() {
         onSelectBody={selectBody}
         selectedBodyId={effectiveSelectedBodyId}
         simulationTimeSeconds={simulation.bodySnapshotSimulationTimeSeconds}
+        tracers={simulation.physicsState?.tracers}
       />
 
       {viewMode === 'focus' ? (
@@ -181,6 +243,34 @@ export function App() {
           selectedBodyId={effectiveSelectedBodyId}
         />
       </aside>
+
+      {collisionPanelVisible ? (
+        <aside
+          aria-label="碰撞事件"
+          className="observatory-panel collision-event-panel"
+          data-mobile-open={mobilePanel === 'collision'}
+        >
+          <button
+            aria-label="关闭碰撞事件"
+            className="mobile-panel-close"
+            onClick={() => {
+              setMobilePanel(null);
+            }}
+            title="关闭"
+            type="button"
+          >
+            <X aria-hidden="true" size={18} />
+          </button>
+          <CollisionEventPanel
+            actionsDisabled={simulation.commandPending}
+            batch={latestCollisionBatch}
+            onContinue={continueAfterCollision}
+            onDismiss={dismissCollisionPanel}
+            onSelectBody={selectBody}
+            physicsState={simulation.physicsState}
+          />
+        </aside>
+      ) : null}
 
       {editing.active ? (
         <BodyEditingPanel controller={editing} />
@@ -249,6 +339,20 @@ export function App() {
           <Activity aria-hidden="true" size={18} />
           <span>数据</span>
         </button>
+        {collisionPanelVisible ? (
+          <button
+            aria-label="碰撞事件"
+            aria-pressed={mobilePanel === 'collision'}
+            onClick={() => {
+              setMobilePanel((current) => (current === 'collision' ? null : 'collision'));
+            }}
+            title="碰撞事件"
+            type="button"
+          >
+            <Sparkles aria-hidden="true" size={18} />
+            <span>事件</span>
+          </button>
+        ) : null}
       </nav>
 
       <TimeControls

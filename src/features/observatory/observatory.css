@@ -231,6 +231,12 @@
   width: 304px;
 }
 
+.collision-event-panel {
+  z-index: 20;
+  right: 16px;
+  width: 320px;
+}
+
 .creation-panel-content {
   display: grid;
   gap: 14px;
@@ -912,6 +918,197 @@
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 9px;
   font-weight: 500;
+}
+
+.collision-event-content {
+  display: grid;
+  gap: 12px;
+}
+
+.collision-contact-time {
+  margin: 0;
+  color: var(--obs-warning);
+  font-size: 10px;
+}
+
+.collision-event {
+  display: grid;
+  gap: 8px;
+  padding: 10px;
+  border: 1px solid var(--obs-border);
+  border-radius: var(--obs-radius);
+  background: rgba(255, 255, 255, 0.02);
+}
+
+.collision-event-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.collision-event-header strong {
+  font-size: 13px;
+}
+
+.collision-event-header small {
+  color: var(--obs-muted);
+  font-size: 9px;
+}
+
+.collision-extrapolated {
+  display: inline-flex;
+  align-items: center;
+  gap: 3px;
+  padding: 2px 6px;
+  border: 1px solid rgba(240, 198, 116, 0.4);
+  border-radius: 999px;
+  color: var(--obs-warning);
+  font-size: 8px;
+}
+
+.collision-participants {
+  margin: 0;
+  color: var(--obs-text);
+  font-size: 11px;
+}
+
+.collision-subsection > p {
+  margin: 6px 0 0;
+  color: var(--obs-muted);
+  font-size: 10px;
+  font-weight: 650;
+}
+
+.collision-check-list {
+  display: grid;
+  margin: 6px 0 0;
+  padding: 0;
+  gap: 0;
+  list-style: none;
+}
+
+.collision-check-list li {
+  display: grid;
+  min-height: 34px;
+  align-content: center;
+  gap: 2px;
+  border-bottom: 1px solid rgba(191, 215, 210, 0.08);
+  grid-template-columns: 1fr auto;
+}
+
+.collision-check-list li span {
+  color: var(--obs-muted);
+  font-size: 10px;
+}
+
+.collision-check-list li small {
+  color: var(--obs-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 8px;
+  grid-column: 1;
+}
+
+.collision-check-list li strong {
+  align-self: center;
+  color: var(--obs-accent);
+  font-size: 9px;
+  grid-column: 2;
+  grid-row: 1 / span 2;
+}
+
+.collision-check-list li[data-passed='false'] strong {
+  color: var(--obs-error);
+}
+
+.collision-remnant-list {
+  display: grid;
+  margin-top: 6px;
+  gap: 5px;
+}
+
+.collision-remnant-list button {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 7px 9px;
+  border: 1px solid var(--obs-border);
+  border-radius: 4px;
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--obs-text);
+  cursor: pointer;
+  text-align: left;
+}
+
+.collision-remnant-list button:hover {
+  border-color: var(--obs-border-strong);
+  background: rgba(255, 255, 255, 0.06);
+}
+
+.collision-remnant-list button strong {
+  font-size: 10px;
+  font-weight: 600;
+}
+
+.collision-remnant-list button small {
+  color: var(--obs-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 8px;
+}
+
+.collision-passive-summary {
+  margin: 6px 0 0;
+  color: var(--obs-muted);
+  font-size: 9px;
+}
+
+.collision-model-version {
+  margin: 0;
+  color: var(--obs-muted);
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 8px;
+}
+
+.collision-actions {
+  display: grid;
+  gap: 6px;
+  grid-template-columns: 1fr 1fr;
+}
+
+.collision-actions button {
+  display: inline-flex;
+  min-height: 34px;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  border: 1px solid rgba(76, 201, 176, 0.5);
+  border-radius: 4px;
+  background: rgba(76, 201, 176, 0.12);
+  color: var(--obs-accent);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.collision-actions button:hover:not(:disabled) {
+  border-color: var(--obs-accent);
+  background: rgba(76, 201, 176, 0.2);
+}
+
+.collision-actions button:disabled {
+  cursor: not-allowed;
+  opacity: 0.45;
+}
+
+.collision-actions .collision-dismiss-button {
+  border-color: var(--obs-border);
+  background: rgba(255, 255, 255, 0.035);
+  color: var(--obs-text);
+}
+
+.collision-actions .collision-dismiss-button:hover:not(:disabled) {
+  border-color: var(--obs-border-strong);
+  background: rgba(255, 255, 255, 0.06);
 }
 
 .time-controls {

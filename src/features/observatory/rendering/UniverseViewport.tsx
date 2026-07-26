@@ -1,7 +1,7 @@
 import { useEffect, useRef, type JSX } from 'react';
 
 import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
-import type { BodyState } from '../../../physics/protocol/schemas';
+import type { BodyState, PassiveCollisionAsset } from '../../../physics/protocol/schemas';
 import {
   createObservatoryRenderer,
   disposeObservatoryRenderer,
@@ -12,10 +12,13 @@ import { loadObservatoryScene } from './observatory-scene-loader';
 import type { ObservatoryScene } from './observatory-scene';
 import './universe-viewport.css';
 
+const EMPTY_PASSIVE_ASSETS: readonly PassiveCollisionAsset[] = [];
+
 export interface UniverseViewportProps {
   readonly bodies: readonly BodyState[];
   readonly className?: string;
   readonly creationState?: CreationOverlayState | null;
+  readonly dustCohorts?: readonly PassiveCollisionAsset[] | undefined;
   readonly focusBodyId: string | null;
   readonly onBackendChange?: (backend: RendererBackend) => void;
   readonly onError?: (error: Error) => void;
@@ -23,12 +26,14 @@ export interface UniverseViewportProps {
   readonly onSelectBody: (bodyId: string) => void;
   readonly selectedBodyId: string | null;
   readonly simulationTimeSeconds: number;
+  readonly tracers?: readonly PassiveCollisionAsset[] | undefined;
 }
 
 export function UniverseViewport({
   bodies,
   className,
   creationState = null,
+  dustCohorts = EMPTY_PASSIVE_ASSETS,
   focusBodyId,
   onBackendChange,
   onError,
@@ -36,6 +41,7 @@ export function UniverseViewport({
   onSelectBody,
   selectedBodyId,
   simulationTimeSeconds,
+  tracers = EMPTY_PASSIVE_ASSETS,
 }: UniverseViewportProps): JSX.Element {
   const mountRef = useRef<HTMLDivElement>(null);
   const sceneRef = useRef<ObservatoryScene | null>(null);
@@ -43,6 +49,7 @@ export function UniverseViewport({
   const bodiesRef = useRef(bodies);
   const creationStateRef = useRef(creationState);
   const focusBodyIdRef = useRef(focusBodyId);
+  const passiveAssetsRef = useRef({ tracers, dustCohorts });
   const selectedBodyIdRef = useRef(selectedBodyId);
   const simulationTimeSecondsRef = useRef(simulationTimeSeconds);
   const onBackendChangeRef = useRef(onBackendChange);
@@ -54,13 +61,14 @@ export function UniverseViewport({
     bodiesRef.current = bodies;
     selectedBodyIdRef.current = selectedBodyId;
     simulationTimeSecondsRef.current = simulationTimeSeconds;
+    passiveAssetsRef.current = { tracers, dustCohorts };
     const scene = sceneRef.current;
-    scene?.update(bodies, selectedBodyId, simulationTimeSeconds);
+    scene?.update(bodies, selectedBodyId, simulationTimeSeconds, { tracers, dustCohorts });
     const pendingFocusBodyId = pendingFocusBodyIdRef.current;
     if (scene !== null && pendingFocusBodyId !== null && scene.focusBody(pendingFocusBodyId)) {
       pendingFocusBodyIdRef.current = null;
     }
-  }, [bodies, selectedBodyId, simulationTimeSeconds]);
+  }, [bodies, dustCohorts, selectedBodyId, simulationTimeSeconds, tracers]);
 
   useEffect(() => {
     creationStateRef.current = creationState;
@@ -127,6 +135,7 @@ export function UniverseViewport({
           bodiesRef.current,
           selectedBodyIdRef.current,
           simulationTimeSecondsRef.current,
+          passiveAssetsRef.current,
         );
         if (focusBodyIdRef.current === null) {
           pendingFocusBodyIdRef.current = null;

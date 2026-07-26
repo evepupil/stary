@@ -11,6 +11,7 @@ import {
   applyControllerFatalError,
   applyWorkerMessage,
   createInitialSimulationState,
+  type CollisionBatchRecord,
   type SimulationPhase,
   type SimulationRunState,
   type UniverseSimulationState,
@@ -32,6 +33,7 @@ export interface UniverseSimulation {
   readonly physicsState: PhysicsState | null;
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
+  readonly latestCollisionBatch: CollisionBatchRecord | null;
   readonly bodyRevision: number;
   readonly bodySnapshotSimulationTimeSeconds: number;
   readonly simulationTimeSeconds: number;

@@ -1,5 +1,6 @@
 import type {
   BodyState,
+  CollisionEvent,
   PhysicsDiagnostics,
   PhysicsState,
   WorkerToMainMessage,
@@ -8,6 +9,22 @@ import type {
 export type SimulationPhase = 'initializing' | 'ready' | 'error';
 export type SimulationRunState = Extract<WorkerToMainMessage, { type: 'status' }>['runState'];
 
+type CollisionBatchResolvedMessage = Extract<
+  WorkerToMainMessage,
+  { type: 'collisionBatchResolved' }
+>;
+export type CollisionLedgerDelta = CollisionBatchResolvedMessage['ledgerDelta'][number];
+
+export interface CollisionBatchRecord {
+  readonly collisionBatchSequence: number;
+  readonly contactTimeSeconds: number;
+  readonly requestedTargetSimulationTimeSeconds: number;
+  readonly bodyRevisionAfter: number;
+  readonly events: readonly CollisionEvent[];
+  readonly ledgerDelta: readonly CollisionLedgerDelta[];
+  readonly participants: readonly BodyState[];
+}
+
 export interface UniverseSimulationState {
   readonly phase: SimulationPhase;
   readonly runState: SimulationRunState;
@@ -15,6 +32,7 @@ export interface UniverseSimulationState {
   readonly physicsState: PhysicsState | null;
   readonly diagnostics: PhysicsDiagnostics | null;
   readonly baselineDiagnostics: PhysicsDiagnostics | null;
+  readonly latestCollisionBatch: CollisionBatchRecord | null;
   readonly bodyRevision: number;
   readonly bodySnapshotSimulationTimeSeconds: number;
   readonly simulationTimeSeconds: number;
@@ -23,6 +41,15 @@ export interface UniverseSimulationState {
   readonly timeScale: number;
   readonly error: Error | null;
   readonly commandPending: boolean;
+}
+
+function captureCollisionParticipants(
+  previousState: UniverseSimulationState,
+  events: readonly CollisionEvent[],
+): readonly BodyState[] {
+  const participantIds = new Set(events.flatMap((event) => event.participantBodyIds));
+  const previousBodies = previousState.physicsState?.majorBodies ?? previousState.bodies;
+  return previousBodies.filter((body) => participantIds.has(body.id));
 }
 
 export function createInitialSimulationState(
@@ -36,6 +63,7 @@ export function createInitialSimulationState(
     physicsState: null,
     diagnostics: null,
     baselineDiagnostics: null,
+    latestCollisionBatch: null,
     bodyRevision: 0,
     bodySnapshotSimulationTimeSeconds: 0,
     simulationTimeSeconds: 0,
@@ -70,6 +98,7 @@ export function applyWorkerMessage(
         ...state,
         phase: 'ready',
         runState: 'initialized',
+        latestCollisionBatch: null,
         bodyRevision: message.bodyRevision,
         simulationTimeSeconds: message.simulationTimeSeconds,
         error: null,
@@ -113,6 +142,7 @@ export function applyWorkerMessage(
         physicsState: message.state,
         diagnostics: message.state.diagnostics.activeRebound,
         baselineDiagnostics: message.state.diagnostics.activeRebound,
+        latestCollisionBatch: null,
         bodyRevision: message.bodyRevision,
         bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
         simulationTimeSeconds: message.simulationTimeSeconds,
@@ -134,6 +164,15 @@ export function applyWorkerMessage(
         physicsState: message.state,
         diagnostics: message.state.diagnostics.activeRebound,
         baselineDiagnostics: message.state.diagnostics.activeRebound,
+        latestCollisionBatch: {
+          collisionBatchSequence: message.collisionBatchSequence,
+          contactTimeSeconds: message.contactTimeSeconds,
+          requestedTargetSimulationTimeSeconds: message.requestedTargetSimulationTimeSeconds,
+          bodyRevisionAfter: message.bodyRevisionAfter,
+          events: message.events,
+          ledgerDelta: message.ledgerDelta,
+          participants: captureCollisionParticipants(state, message.events),
+        },
         bodyRevision: message.bodyRevisionAfter,
         bodySnapshotSimulationTimeSeconds: message.simulationTimeSeconds,
         simulationTimeSeconds: message.simulationTimeSeconds,

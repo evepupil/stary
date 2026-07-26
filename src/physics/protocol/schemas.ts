@@ -313,6 +313,7 @@ export {
   type CollisionEvent,
   type LinearMomentumKgMetersPerSecond,
   type LayeredPhysicsDiagnostics,
+  type PassiveCollisionAsset,
   type PhysicsDiagnostics,
   type PhysicsState,
   type PositionMeters,

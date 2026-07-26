@@ -24,7 +24,11 @@ import {
 } from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 
-import type { BodyState, PositionMeters } from '../../../physics/protocol/schemas';
+import type {
+  BodyState,
+  PassiveCollisionAsset,
+  PositionMeters,
+} from '../../../physics/protocol/schemas';
 import type { CreationOverlayState, CreationPlacement } from '../../creation/model/creation-types';
 import { getCelestialCatalogEntry } from '../catalog';
 import { advanceAdaptiveExposure, computeTargetExposure } from './adaptive-exposure';
@@ -74,6 +78,13 @@ import {
 } from './lighting/stellar-occlusion';
 import { sampleOsculatingOrbit } from './orbit';
 import { findMostMassiveBody, findOrbitParent } from './orbit-parent';
+import {
+  createPassiveAssetLayer,
+  disposePassiveAssetLayer,
+  snapshotPassiveAssetLayer,
+  updatePassiveAssetLayer,
+  type PassiveAssetLayer,
+} from './passive-assets/passive-asset-layer';
 import {
   recordSceneCreated,
   recordSceneDisposed,
@@ -190,6 +201,11 @@ export interface ObservatorySceneOptions {
   readonly renderer: ObservatoryRenderer;
 }
 
+export interface PassiveAssetsUpdate {
+  readonly tracers: readonly PassiveCollisionAsset[];
+  readonly dustCohorts: readonly PassiveCollisionAsset[];
+}
+
 export class ObservatoryScene {
   private readonly backend: RendererBackend;
   private readonly bodyVisuals = new Map<string, BodyVisual>();
@@ -217,6 +233,7 @@ export class ObservatoryScene {
   private readonly onError: (error: Error) => void;
   private readonly onSelectBody: (bodyId: string) => void;
   private readonly orbitVisuals = new Map<string, OrbitVisual>();
+  private readonly passiveAssetLayer: PassiveAssetLayer;
   private readonly renderer: ObservatoryRenderer;
   private readonly resizeObserver: ResizeObserver | null = null;
   private readonly scene = new Scene();
@@ -245,7 +262,9 @@ export class ObservatoryScene {
   private lastVisualDiagnosticsUpdateTimeMilliseconds = Number.NEGATIVE_INFINITY;
   private lastExposureUpdateTimeMilliseconds: number | null = null;
   private latestBodies: readonly BodyState[] = [];
+  private latestDustCohorts: readonly PassiveCollisionAsset[] = [];
   private latestSimulationTimeSeconds = 0;
+  private latestTracers: readonly PassiveCollisionAsset[] = [];
   private metersToSceneUnit = 1;
   private pointerDownPosition: Vector2 | null = null;
   private selectedBodyId: string | null = null;
@@ -266,6 +285,7 @@ export class ObservatoryScene {
     this.onError = options.onError;
     this.onSelectBody = options.onSelectBody;
     this.renderer = options.renderer;
+    this.passiveAssetLayer = createPassiveAssetLayer(this.backend);
 
     const canvas = this.renderer.domElement;
     canvas.className = 'universe-viewport__canvas';
@@ -292,6 +312,7 @@ export class ObservatoryScene {
       this.scene.background = new Color(0x030506);
       this.scene.add(new AmbientLight(0x7f96a3, 0.18));
       this.scene.add(this.starField);
+      this.scene.add(this.passiveAssetLayer.group);
       this.creationVelocityArrow.visible = false;
       this.creationVelocityArrow.renderOrder = 6;
       this.scene.add(this.creationVelocityArrow);
@@ -316,6 +337,7 @@ export class ObservatoryScene {
     bodies: readonly BodyState[],
     selectedBodyId: string | null,
     simulationTimeSeconds = 0,
+    passiveAssets?: PassiveAssetsUpdate,
   ): void {
     if (this.disposed) {
       return;
@@ -326,6 +348,8 @@ export class ObservatoryScene {
 
     this.selectedBodyId = selectedBodyId;
     this.latestBodies = bodies;
+    this.latestTracers = passiveAssets?.tracers ?? [];
+    this.latestDustCohorts = passiveAssets?.dustCohorts ?? [];
     this.latestSimulationTimeSeconds = simulationTimeSeconds;
     const previousMetersToSceneUnit = this.metersToSceneUnit;
     const primary = findMostMassiveBody(bodies);
@@ -395,6 +419,7 @@ export class ObservatoryScene {
     }
 
     this.updateOrbits(bodies);
+    this.updatePassiveAssets();
     this.updateCreationOverlay();
 
     if (!usesCreationCamera(this.creationState) && this.viewMode === 'focus') {
@@ -492,6 +517,7 @@ export class ObservatoryScene {
       disposeBodyVisual(this.scene, visual);
     }
     this.bodyVisuals.clear();
+    disposePassiveAssetLayer(this.passiveAssetLayer);
     this.textureCache.dispose();
     this.scene.traverse(disposeRenderable);
     this.scene.clear();
@@ -589,7 +615,17 @@ export class ObservatoryScene {
       }
     }
     this.updateOrbits(this.latestBodies);
+    this.updatePassiveAssets();
     this.updateCreationOverlay();
+  }
+
+  private updatePassiveAssets(): void {
+    updatePassiveAssetLayer(this.passiveAssetLayer, {
+      tracers: this.latestTracers,
+      dustCohorts: this.latestDustCohorts,
+      metersToSceneUnit: this.metersToSceneUnit,
+      originMeters: this.sceneOriginMeters,
+    });
   }
 
   private readonly updateOrbits = (bodies: readonly BodyState[]): void => {
@@ -1757,6 +1793,7 @@ export class ObservatoryScene {
         0,
       ),
       blackHoleTexturePool: snapshotBlackHoleTexturePool(),
+      passiveAssets: snapshotPassiveAssetLayer(this.passiveAssetLayer),
       planetaryRingMeshes: [...this.bodyVisuals.values()].filter(
         (visual) => visual.planetaryRing !== null,
       ).length,
@@ -1851,6 +1888,7 @@ export class ObservatoryScene {
     canvas.removeEventListener('pointermove', this.handlePointerMove);
     canvas.removeEventListener('pointerup', this.handlePointerUp);
     canvas.removeEventListener('pointercancel', this.handlePointerCancel);
+    disposePassiveAssetLayer(this.passiveAssetLayer);
     this.scene.traverse(disposeRenderable);
     this.scene.clear();
     this.textureCache.dispose();

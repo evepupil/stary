@@ -210,6 +210,82 @@ describe('applyWorkerMessage', () => {
     expect(applyWorkerMessage(resolved, stale)).toBe(resolved);
   });
 
+  it('碰撞批次保留事件、账本与碰前参与体快照，后续 state 不清除记录', () => {
+    const firstParent = createTestBody({ id: 'first-parent', massKg: 1.5 });
+    const secondParent = createTestBody({ id: 'second-parent', massKg: 0.5 });
+    const initial = {
+      ...createInitialSimulationState([firstParent, secondParent], 1),
+      phase: 'ready',
+      runState: 'running',
+      physicsState: createTestPhysicsState([firstParent, secondParent]),
+      latestAppliedSequence: 2,
+      latestStateSequence: 2,
+    } as const;
+    const collision = createTestCollisionBatchMessage({ sequence: 3, bodyRevisionBefore: 0 });
+
+    const resolved = applyWorkerMessage(initial, collision);
+
+    expect(resolved.latestCollisionBatch).toMatchObject({
+      collisionBatchSequence: collision.collisionBatchSequence,
+      contactTimeSeconds: collision.contactTimeSeconds,
+      bodyRevisionAfter: collision.bodyRevisionAfter,
+      events: collision.events,
+      ledgerDelta: collision.ledgerDelta,
+    });
+    expect(resolved.latestCollisionBatch?.participants.map((body) => body.id)).toEqual([
+      'first-parent',
+      'second-parent',
+    ]);
+
+    const later = applyWorkerMessage(
+      resolved,
+      createTestStateMessage(4, {
+        bodyRevision: collision.bodyRevisionAfter,
+        bodies: collision.state.majorBodies,
+        simulationTimeSeconds: 30,
+      }),
+    );
+    expect(later.latestCollisionBatch).toBe(resolved.latestCollisionBatch);
+  });
+
+  it('天体替换与 worker 重启会清除碰撞批次记录', () => {
+    const collision = createTestCollisionBatchMessage({ sequence: 3, bodyRevisionBefore: 0 });
+    const resolved = applyWorkerMessage(
+      {
+        ...createInitialSimulationState(bodies, 1),
+        phase: 'ready',
+        physicsState: createTestPhysicsState(bodies),
+        latestAppliedSequence: 2,
+        latestStateSequence: 2,
+      },
+      collision,
+    );
+    expect(resolved.latestCollisionBatch).not.toBeNull();
+
+    const replaced = applyWorkerMessage(
+      resolved,
+      createTestReplacementMessage({
+        sequence: 5,
+        simulationTimeSeconds: 40,
+        replyToSequence: 9,
+        bodyRevision: collision.bodyRevisionAfter + 1,
+        bodies: [createTestBody({ id: 'edited' })],
+      }),
+    );
+    expect(replaced.latestCollisionBatch).toBeNull();
+
+    const restarted = applyWorkerMessage(resolved, {
+      version: PHYSICS_PROTOCOL_VERSION,
+      sessionId: 'restarted-session',
+      sequence: 0,
+      simulationTimeSeconds: 0,
+      replyToSequence: 0,
+      type: 'ready',
+      bodyRevision: 0,
+    });
+    expect(restarted.latestCollisionBatch).toBeNull();
+  });
+
   it('可恢复错误保持 phase，不可恢复错误进入 error phase', () => {
     const ready = { ...createInitialSimulationState(bodies, 1), phase: 'ready' } as const;
     const recoverable = applyWorkerMessage(ready, {

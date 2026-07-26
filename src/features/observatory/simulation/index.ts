@@ -4,6 +4,7 @@ export {
   useUniverseSimulation,
   type UniverseSimulation,
 } from './use-universe-simulation';
+export { type CollisionBatchRecord, type CollisionLedgerDelta } from './simulation-state';
 export {
   calculateRelativeScalarDrift,
   calculateRelativeSpeedMetersPerSecond,

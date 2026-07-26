@@ -15,6 +15,8 @@ import {
 } from '../collisions/model-sources';
 import { compensatedSum } from '../collisions/vector';
 
+export type { PassiveCollisionAsset } from '../collisions/schemas';
+
 const finiteNumberSchema = z.number();
 const nonNegativeFiniteNumberSchema = finiteNumberSchema.nonnegative();
 const positiveFiniteNumberSchema = finiteNumberSchema.positive();

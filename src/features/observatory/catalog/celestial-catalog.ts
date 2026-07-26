@@ -7,6 +7,7 @@ export const CELESTIAL_GROUPS = [
   { id: 'satellite', label: '卫星', order: 3 },
   { id: 'compact-object', label: '致密天体', order: 4 },
   { id: 'minor-body', label: '小天体', order: 5 },
+  { id: 'collision-remnant', label: '碰撞产物', order: 6 },
 ] as const;
 
 export type CelestialGroupId = (typeof CELESTIAL_GROUPS)[number]['id'];
@@ -118,10 +119,33 @@ const catalogById: ReadonlyMap<string, CelestialCatalogEntry> = new Map(
   CELESTIAL_CATALOG.map((entry) => [entry.id, entry]),
 );
 
+// Rust 碰撞内核以 `major-<FNV-1a 64 十六进制>` 形式生成主要残体的确定性 ID。
+const COLLISION_REMNANT_ID_PATTERN = /^major-([0-9a-f]{16})$/;
+
+function getCollisionRemnantCatalogEntry(bodyId: string): CelestialCatalogEntry | null {
+  const hash = COLLISION_REMNANT_ID_PATTERN.exec(bodyId)?.[1];
+  if (hash === undefined) {
+    return null;
+  }
+  return {
+    id: bodyId,
+    name: `碰撞残体 ${hash.slice(0, 6)}`,
+    type: '碰撞残体',
+    order: 20_000,
+    color: 0xc79a6b,
+    group: 'collision-remnant',
+  };
+}
+
 export function getCelestialCatalogEntry(bodyId: string): CelestialCatalogEntry | null {
   const catalogEntry = catalogById.get(bodyId);
   if (catalogEntry !== undefined) {
     return catalogEntry;
+  }
+
+  const remnantEntry = getCollisionRemnantCatalogEntry(bodyId);
+  if (remnantEntry !== null) {
+    return remnantEntry;
   }
 
   const identity = parseCreatedBodyId(bodyId);

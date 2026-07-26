@@ -51,4 +51,18 @@ describe('celestial catalog', () => {
       group: 'minor-body',
     });
   });
+
+  it('为碰撞残体的确定性 id 提供名称、类型和碰撞产物分组', () => {
+    expect(getCelestialCatalogEntry('major-00ff12ab34cd56ef')).toMatchObject({
+      name: '碰撞残体 00ff12',
+      type: '碰撞残体',
+      group: 'collision-remnant',
+    });
+  });
+
+  it('拒绝把非残体格式的 id 当作碰撞残体', () => {
+    expect(getCelestialCatalogEntry('major-XYZ')).toBeNull();
+    expect(getCelestialCatalogEntry('major-00ff12ab34cd56')).toBeNull();
+    expect(getCelestialCatalogEntry('tracer-00ff12ab34cd56ef')).toBeNull();
+  });
 });
