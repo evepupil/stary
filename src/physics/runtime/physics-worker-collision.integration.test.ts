@@ -47,7 +47,14 @@ function command(
   payload:
     | { readonly bodies: readonly BodyState[]; readonly type: 'initialize' }
     | { readonly type: 'dispose' }
-    | { readonly stepSeconds: number; readonly type: 'step' },
+    | { readonly stepSeconds: number; readonly type: 'step' }
+    | {
+        readonly expectedBodyRevision: number;
+        readonly expectedSimulationTimeSeconds: number;
+        readonly snapshotSimulationTimeSeconds: number;
+        readonly state: PhysicsState;
+        readonly type: 'restoreSnapshot';
+      },
 ): MainToWorkerMessage {
   return {
     version: PHYSICS_PROTOCOL_VERSION,
@@ -375,6 +382,49 @@ describe('real collision Worker pipeline', () => {
     expect(second.events).toStrictEqual(first.events);
     expect(second.ledgerDelta).toStrictEqual(first.ledgerDelta);
     expect(second.state).toStrictEqual(first.state);
+  });
+
+  it('restores a post-collision snapshot and replays the identical continuation', async () => {
+    const bodies = contactBodies({
+      ...SMALL_BASE,
+      impactSpeedMetersPerSecond: 1.1 * smallCriticalSpeed,
+    });
+    const { collision, messages, runtime } = await runCollision(bodies);
+
+    await runtime.receive(command(2, { type: 'step', stepSeconds: 0.5 }));
+    const firstContinuation = messages.at(-1);
+    if (firstContinuation?.type !== 'state') {
+      throw new Error('碰撞后的推进没有返回 state');
+    }
+
+    await runtime.receive(
+      command(3, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: collision.bodyRevisionAfter,
+        expectedSimulationTimeSeconds: firstContinuation.simulationTimeSeconds,
+        snapshotSimulationTimeSeconds: collision.contactTimeSeconds,
+        state: collision.state,
+      }),
+    );
+    const restored = messages.at(-1);
+    if (restored?.type !== 'snapshotRestored') {
+      throw new Error('恢复命令没有返回 snapshotRestored');
+    }
+    expect(restored.bodyRevision).toBe(collision.bodyRevisionAfter + 1);
+    expect(restored.simulationTimeSeconds).toBe(collision.contactTimeSeconds);
+    expect(restored.state).toStrictEqual(collision.state);
+
+    await runtime.receive(command(4, { type: 'step', stepSeconds: 0.5 }));
+    const replayedContinuation = messages.at(-1);
+    if (replayedContinuation?.type !== 'state') {
+      throw new Error('恢复后的推进没有返回 state');
+    }
+    expect(replayedContinuation.simulationTimeSeconds).toBe(
+      firstContinuation.simulationTimeSeconds,
+    );
+    expect(replayedContinuation.state).toStrictEqual(firstContinuation.state);
+
+    await runtime.receive(command(5, { type: 'dispose' }));
   });
 
   it('rejects a collision when passive-asset capacity is exhausted and keeps the contact state', async () => {

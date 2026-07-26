@@ -9,6 +9,7 @@ import {
   createTestBody,
   createTestCollisionBatchMessage,
   createTestReplacementMessage,
+  createTestSnapshotRestoredMessage,
   createTestStateMessage,
 } from './test-helpers';
 
@@ -61,6 +62,26 @@ describe('simulation message buffer', () => {
     const flushed = flushSimulationMessageBuffer(afterCollision);
 
     expect(collision.replyToSequence).toBeNull();
+    expect(flushed.message).toBeNull();
+    expect(flushed.buffer).toBe(EMPTY_SIMULATION_MESSAGE_BUFFER);
+  });
+
+  it('快照恢复清除已缓存的恢复前 state，阻止旧世界回写', () => {
+    const buffered = bufferSimulationMessage(
+      EMPTY_SIMULATION_MESSAGE_BUFFER,
+      createTestStateMessage(5, { bodyRevision: 0 }),
+    );
+    const restored = createTestSnapshotRestoredMessage({
+      sequence: 6,
+      simulationTimeSeconds: 42,
+      replyToSequence: 7,
+      bodyRevision: 1,
+      bodies: [createTestBody({ id: 'restored' })],
+    });
+
+    const afterRestore = bufferSimulationMessage(buffered, restored);
+    const flushed = flushSimulationMessageBuffer(afterRestore);
+
     expect(flushed.message).toBeNull();
     expect(flushed.buffer).toBe(EMPTY_SIMULATION_MESSAGE_BUFFER);
   });

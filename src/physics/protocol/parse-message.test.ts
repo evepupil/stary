@@ -57,7 +57,16 @@ describe('parseMainToWorkerMessage', () => {
       expectedSimulationTimeSeconds: 0,
       bodies: [createBody('sun'), createBody('planet')],
     },
-    { ...envelope, sequence: 6, type: 'dispose' },
+    {
+      ...envelope,
+      sequence: 6,
+      type: 'restoreSnapshot',
+      expectedBodyRevision: 2,
+      expectedSimulationTimeSeconds: 0,
+      snapshotSimulationTimeSeconds: 86_400,
+      state: createState([createBody('sun'), createBody('earth')]),
+    },
+    { ...envelope, sequence: 7, type: 'dispose' },
   ])('接受合法 $type 命令', (message) => {
     expect(parseMainToWorkerMessage(message)).toEqual(message);
   });
@@ -73,7 +82,7 @@ describe('parseMainToWorkerMessage', () => {
     ).toThrow();
   });
 
-  it.each([1, 2])('严格拒绝旧协议 v%s', (version) => {
+  it.each([1, 2, 3])('严格拒绝旧协议 v%s', (version) => {
     expect(() => parseMainToWorkerMessage({ ...envelope, version, type: 'start' })).toThrow();
     expect(() =>
       parseWorkerToMainMessage({
@@ -260,6 +269,15 @@ describe('parseWorkerToMainMessage', () => {
       replyToSequence: 5,
       bodyRevision: 1,
       state: createState([createBody('sun'), createBody('planet')]),
+    },
+    {
+      ...envelope,
+      sequence: 2,
+      simulationTimeSeconds: 86_400,
+      type: 'snapshotRestored',
+      replyToSequence: 6,
+      bodyRevision: 2,
+      state: createState([createBody('sun'), createBody('earth')]),
     },
     {
       ...envelope,
@@ -475,5 +493,23 @@ describe('parseWorkerToMainMessage', () => {
         },
       }),
     ).toThrow('不能共享');
+  });
+
+  it('拒绝修订号为零或缺少完整状态的 snapshotRestored', () => {
+    const restored = {
+      ...envelope,
+      sequence: 2,
+      simulationTimeSeconds: 86_400,
+      type: 'snapshotRestored',
+      replyToSequence: 6,
+      bodyRevision: 2,
+      state: createState([createBody('sun')]),
+    } as const;
+
+    expect(parseWorkerToMainMessage(restored)).toEqual(restored);
+    expect(() => parseWorkerToMainMessage({ ...restored, bodyRevision: 0 })).toThrow();
+    const withoutState: Record<string, unknown> = { ...restored };
+    Reflect.deleteProperty(withoutState, 'state');
+    expect(() => parseWorkerToMainMessage(withoutState)).toThrow();
   });
 });

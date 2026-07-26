@@ -128,6 +128,7 @@ export function applyWorkerMessage(
         latestStateSequence: message.sequence,
       };
     case 'bodiesReplaced':
+    case 'snapshotRestored':
       if (
         message.bodyRevision <= state.bodyRevision ||
         message.sequence <= state.latestAppliedSequence

@@ -139,6 +139,32 @@ export function createTestReplacementMessage(
   };
 }
 
+interface TestSnapshotRestoredMessageOptions {
+  readonly bodies: readonly BodyState[];
+  readonly bodyRevision: number;
+  readonly replyToSequence: number;
+  readonly sequence: number;
+  readonly simulationTimeSeconds: number;
+  readonly resolvedEventCount?: number;
+}
+
+export function createTestSnapshotRestoredMessage(
+  options: TestSnapshotRestoredMessageOptions,
+): Extract<WorkerToMainMessage, { type: 'snapshotRestored' }> {
+  return {
+    version: PHYSICS_PROTOCOL_VERSION,
+    sessionId: 'test-session',
+    sequence: options.sequence,
+    simulationTimeSeconds: options.simulationTimeSeconds,
+    replyToSequence: options.replyToSequence,
+    type: 'snapshotRestored',
+    bodyRevision: options.bodyRevision,
+    state: createTestPhysicsState(options.bodies, {
+      resolvedEventCount: options.resolvedEventCount ?? 0,
+    }),
+  };
+}
+
 interface TestCollisionBatchMessageOptions {
   readonly bodyRevisionAfter?: number;
   readonly bodyRevisionBefore?: number;

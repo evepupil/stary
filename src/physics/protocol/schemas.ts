@@ -10,7 +10,7 @@ import {
 } from './collision-ledger-summary';
 import { bodyStatesSchema, collisionEventSchema, physicsStateSchema } from './state-schemas';
 
-export const PHYSICS_PROTOCOL_VERSION = 3 as const;
+export const PHYSICS_PROTOCOL_VERSION = 4 as const;
 export const MAX_MAJOR_BODY_COUNT = MAX_COLLISION_MAJOR_BODIES;
 export const MAX_TIME_SCALE = 5_400_000 as const;
 
@@ -63,6 +63,13 @@ const replaceBodiesCommandSchema = messageEnvelopeSchema.extend({
   expectedSimulationTimeSeconds: simulationTimeSecondsSchema,
   bodies: bodyStatesSchema,
 });
+const restoreSnapshotCommandSchema = messageEnvelopeSchema.extend({
+  type: z.literal('restoreSnapshot'),
+  expectedBodyRevision: bodyRevisionSchema,
+  expectedSimulationTimeSeconds: simulationTimeSecondsSchema,
+  snapshotSimulationTimeSeconds: simulationTimeSecondsSchema,
+  state: physicsStateSchema,
+});
 const disposeCommandSchema = messageEnvelopeSchema.extend({ type: z.literal('dispose') });
 
 export const mainToWorkerMessageSchema = z.discriminatedUnion('type', [
@@ -72,6 +79,7 @@ export const mainToWorkerMessageSchema = z.discriminatedUnion('type', [
   stepCommandSchema,
   setTimeScaleCommandSchema,
   replaceBodiesCommandSchema,
+  restoreSnapshotCommandSchema,
   disposeCommandSchema,
 ]);
 
@@ -107,6 +115,13 @@ const bodiesReplacedResponseSchema = workerMessageEnvelopeSchema.extend({
   state: physicsStateSchema,
 });
 
+const snapshotRestoredResponseSchema = workerMessageEnvelopeSchema.extend({
+  type: z.literal('snapshotRestored'),
+  replyToSequence: messageSequenceSchema,
+  bodyRevision: positiveBodyRevisionSchema,
+  state: physicsStateSchema,
+});
+
 const statusResponseSchema = workerMessageEnvelopeSchema.extend({
   type: z.literal('status'),
   runState: z.enum(['idle', 'initialized', 'running', 'paused']),
@@ -122,6 +137,7 @@ const errorResponseSchema = workerMessageEnvelopeSchema.extend({
     'bodyRevisionConflict',
     'bodySnapshotConflict',
     'bodyReplacementFailed',
+    'snapshotRestoreFailed',
     'integrationFailed',
     'collisionResolutionFailed',
     'collisionConservationFailed',
@@ -288,6 +304,7 @@ export const workerToMainMessageSchema = z.discriminatedUnion('type', [
   readyResponseSchema,
   stateResponseSchema,
   bodiesReplacedResponseSchema,
+  snapshotRestoredResponseSchema,
   statusResponseSchema,
   errorResponseSchema,
   disposedResponseSchema,

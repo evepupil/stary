@@ -6,7 +6,12 @@ import {
 } from '../collisions/collision-kernel-wasm';
 import { parseMainToWorkerMessage, parseWorkerToMainMessage } from '../protocol/parse-message';
 import { createPhysicsStateFromSnapshot } from '../protocol/physics-state';
-import type { MainToWorkerMessage, PhysicsState, WorkerToMainMessage } from '../protocol/schemas';
+import type {
+  BodyState,
+  MainToWorkerMessage,
+  PhysicsState,
+  WorkerToMainMessage,
+} from '../protocol/schemas';
 import { PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
 import { SessionSequenceGate } from '../protocol/session-sequence-gate';
 import {
@@ -53,6 +58,34 @@ function isContactSetOverflow(error: unknown): boolean {
     'status' in error &&
     (error as Error & { readonly status?: unknown }).status === -7
   );
+}
+
+function assertRestoredSnapshotMatches(
+  snapshotBodies: readonly BodyState[],
+  state: PhysicsState,
+): void {
+  if (snapshotBodies.length !== state.majorBodies.length) {
+    throw new Error('候选物理模拟的天体数量与快照不一致');
+  }
+  for (const [index, expected] of state.majorBodies.entries()) {
+    const actual = snapshotBodies[index];
+    if (actual === undefined) {
+      throw new Error(`候选物理模拟缺少快照天体 ${expected.id}`);
+    }
+    const matches =
+      actual.id === expected.id &&
+      actual.massKg === expected.massKg &&
+      actual.radiusMeters === expected.radiusMeters &&
+      actual.positionMeters.x === expected.positionMeters.x &&
+      actual.positionMeters.y === expected.positionMeters.y &&
+      actual.positionMeters.z === expected.positionMeters.z &&
+      actual.velocityMetersPerSecond.x === expected.velocityMetersPerSecond.x &&
+      actual.velocityMetersPerSecond.y === expected.velocityMetersPerSecond.y &&
+      actual.velocityMetersPerSecond.z === expected.velocityMetersPerSecond.z;
+    if (!matches) {
+      throw new Error(`候选物理模拟的天体 ${expected.id} 首帧与快照不一致`);
+    }
+  }
 }
 
 export class PhysicsWorkerRuntime {
@@ -172,6 +205,9 @@ export class PhysicsWorkerRuntime {
         break;
       case 'replaceBodies':
         await this.#replaceBodies(message);
+        break;
+      case 'restoreSnapshot':
+        await this.#restoreSnapshot(message);
         break;
       case 'dispose':
         this.#dispose();
@@ -343,6 +379,67 @@ export class PhysicsWorkerRuntime {
       replyToSequence: message.sequence,
       bodyRevision: this.#bodyRevision,
       state: candidateState,
+    });
+  }
+
+  async #restoreSnapshot(
+    message: Extract<MainToWorkerMessage, { type: 'restoreSnapshot' }>,
+  ): Promise<void> {
+    const previousSimulation = this.#requireLiveSimulation();
+    if (previousSimulation === undefined) {
+      return;
+    }
+    if (this.#runState !== 'paused') {
+      this.#failSafely('invalidState', '只有暂停状态可以恢复快照');
+      return;
+    }
+    if (message.expectedBodyRevision !== this.#bodyRevision) {
+      this.#sendError(
+        'bodyRevisionConflict',
+        `天体修订号冲突：预期 ${String(this.#bodyRevision)}，实际 ${String(message.expectedBodyRevision)}`,
+        true,
+      );
+      return;
+    }
+    if (message.expectedSimulationTimeSeconds !== previousSimulation.timeSeconds) {
+      this.#sendError(
+        'bodySnapshotConflict',
+        `天体快照时间冲突：预期 ${String(previousSimulation.timeSeconds)}，实际 ${String(message.expectedSimulationTimeSeconds)}`,
+        true,
+      );
+      return;
+    }
+
+    let candidateSimulation: PhysicsSimulation | undefined;
+    try {
+      candidateSimulation = await this.#createSimulation(
+        message.state.majorBodies,
+        message.snapshotSimulationTimeSeconds,
+        { preserveReferenceFrame: true },
+      );
+      if (candidateSimulation.timeSeconds !== message.snapshotSimulationTimeSeconds) {
+        throw new Error('候选物理模拟没有进入快照时间');
+      }
+      assertRestoredSnapshotMatches(candidateSimulation.snapshot().bodies, message.state);
+    } catch (error) {
+      if (candidateSimulation !== undefined && candidateSimulation !== previousSimulation) {
+        candidateSimulation.destroy();
+      }
+      this.#sendError('snapshotRestoreFailed', describeProtocolError(error), true);
+      return;
+    }
+
+    this.#simulation = candidateSimulation;
+    this.#physicsState = message.state;
+    this.#bodyRevision += 1;
+    if (candidateSimulation !== previousSimulation) {
+      previousSimulation.destroy();
+    }
+    this.#send({
+      type: 'snapshotRestored',
+      replyToSequence: message.sequence,
+      bodyRevision: this.#bodyRevision,
+      state: message.state,
     });
   }
 

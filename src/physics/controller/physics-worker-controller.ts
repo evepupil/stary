@@ -9,12 +9,14 @@ import type {
   BodyState,
   MainToWorkerMessage,
   PhysicsAdvanceResult,
+  PhysicsState,
   WorkerToMainMessage,
 } from '../protocol/schemas';
 import {
   bodyRevisionSchema,
   bodyStatesSchema,
   PHYSICS_PROTOCOL_VERSION,
+  physicsStateSchema,
   simulationTimeSecondsSchema,
 } from '../protocol/schemas';
 import { SessionSequenceGate } from '../protocol/session-sequence-gate';
@@ -68,6 +70,13 @@ type ControllerCommandPayload =
       readonly expectedBodyRevision: number;
       readonly expectedSimulationTimeSeconds: number;
       readonly type: 'replaceBodies';
+    }
+  | {
+      readonly expectedBodyRevision: number;
+      readonly expectedSimulationTimeSeconds: number;
+      readonly snapshotSimulationTimeSeconds: number;
+      readonly state: PhysicsState;
+      readonly type: 'restoreSnapshot';
     };
 
 export interface PhysicsWorkerControllerOptions {
@@ -234,6 +243,58 @@ export class PhysicsWorkerController {
     return operation;
   }
 
+  restoreSnapshot(
+    state: PhysicsState,
+    snapshotSimulationTimeSeconds: number,
+    expectedBodyRevision: number,
+    expectedSimulationTimeSeconds: number,
+  ): Promise<WorkerResponseOfType<'snapshotRestored'>> {
+    const initializationError = this.#initializationError();
+    if (initializationError !== undefined) {
+      return Promise.reject(initializationError);
+    }
+    let submittedState: PhysicsState;
+    let submittedSnapshotTimeSeconds: number;
+    let submittedBodyRevision: number;
+    let submittedSimulationTimeSeconds: number;
+    try {
+      submittedState = physicsStateSchema.parse(state);
+      submittedSnapshotTimeSeconds = simulationTimeSecondsSchema.parse(
+        snapshotSimulationTimeSeconds,
+      );
+      submittedBodyRevision = bodyRevisionSchema.parse(expectedBodyRevision);
+      submittedSimulationTimeSeconds = simulationTimeSecondsSchema.parse(
+        expectedSimulationTimeSeconds,
+      );
+    } catch (error) {
+      return Promise.reject(toError(error, '快照恢复请求无效'));
+    }
+
+    const operation = this.#bodyReplacementQueue.then(async () => {
+      await this.pause();
+      const submittedIds = new Set(submittedState.majorBodies.map((body) => body.id));
+      return this.#request(
+        ['snapshotRestored'],
+        {
+          type: 'restoreSnapshot',
+          expectedBodyRevision: submittedBodyRevision,
+          expectedSimulationTimeSeconds: submittedSimulationTimeSeconds,
+          snapshotSimulationTimeSeconds: submittedSnapshotTimeSeconds,
+          state: submittedState,
+        },
+        (message) =>
+          message.bodyRevision === submittedBodyRevision + 1 &&
+          message.simulationTimeSeconds === submittedSnapshotTimeSeconds &&
+          haveSameBodyIds(message.state.majorBodies, submittedIds),
+      );
+    });
+    this.#bodyReplacementQueue = operation.then(
+      () => undefined,
+      () => undefined,
+    );
+    return operation;
+  }
+
   dispose(): Promise<void> {
     const initializationError = this.#initializationError();
     if (initializationError !== undefined) {
@@ -384,6 +445,13 @@ export class PhysicsWorkerController {
         }
         this.#bodyRevision = message.bodyRevision;
         this.#bodyIds = new Set(message.state.majorBodies.map((body) => body.id));
+      } else if (message.type === 'snapshotRestored') {
+        if (message.bodyRevision !== this.#bodyRevision + 1) {
+          throw new Error('Physics Worker 快照恢复没有连续递增天体修订号');
+        }
+        this.#bodyRevision = message.bodyRevision;
+        this.#bodyIds = new Set(message.state.majorBodies.map((body) => body.id));
+        this.#collisionLedgerSummary = message.state.cumulativeCollisionLedger;
       } else if (message.type === 'collisionBatchResolved') {
         if (
           message.bodyRevisionBefore !== this.#bodyRevision ||

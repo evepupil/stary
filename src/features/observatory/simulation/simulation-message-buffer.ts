@@ -3,7 +3,7 @@ import type { WorkerToMainMessage } from '../../../physics/protocol/schemas';
 type StateMessage = Extract<WorkerToMainMessage, { type: 'state' }>;
 type AtomicStateMessage = Extract<
   WorkerToMainMessage,
-  { type: 'bodiesReplaced' | 'collisionBatchResolved' }
+  { type: 'bodiesReplaced' | 'collisionBatchResolved' | 'snapshotRestored' }
 >;
 
 function atomicBodyRevision(message: AtomicStateMessage): number {
@@ -40,7 +40,11 @@ export function bufferSimulationMessage(
     return { stateMessage: message };
   }
 
-  if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
+  if (
+    message.type === 'bodiesReplaced' ||
+    message.type === 'collisionBatchResolved' ||
+    message.type === 'snapshotRestored'
+  ) {
     const bufferedState = buffer.stateMessage;
     if (bufferedState === null) {
       return buffer;

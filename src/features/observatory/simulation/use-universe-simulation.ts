@@ -51,6 +51,12 @@ export interface UniverseSimulation {
     expectedBodyRevision: number,
     expectedSimulationTimeSeconds: number,
   ) => Promise<void>;
+  readonly restoreSnapshot: (
+    snapshotState: PhysicsState,
+    snapshotSimulationTimeSeconds: number,
+    expectedBodyRevision: number,
+    expectedSimulationTimeSeconds: number,
+  ) => Promise<void>;
   readonly retry: () => void;
 }
 
@@ -175,7 +181,11 @@ export function useUniverseSimulation(): UniverseSimulation {
         runStateRef.current = 'initialized';
       } else if (message.type === 'status') {
         runStateRef.current = message.runState;
-      } else if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
+      } else if (
+        message.type === 'bodiesReplaced' ||
+        message.type === 'collisionBatchResolved' ||
+        message.type === 'snapshotRestored'
+      ) {
         runStateRef.current = 'paused';
       } else if (message.type === 'error') {
         runStateRef.current = 'paused';
@@ -278,6 +288,25 @@ export function useUniverseSimulation(): UniverseSimulation {
     [enqueueCommand],
   );
 
+  const restoreSnapshot = useCallback(
+    (
+      snapshotState: PhysicsState,
+      snapshotSimulationTimeSeconds: number,
+      expectedBodyRevision: number,
+      expectedSimulationTimeSeconds: number,
+    ) => {
+      return enqueueCommand((controller) =>
+        controller.restoreSnapshot(
+          snapshotState,
+          snapshotSimulationTimeSeconds,
+          expectedBodyRevision,
+          expectedSimulationTimeSeconds,
+        ),
+      );
+    },
+    [enqueueCommand],
+  );
+
   const retry = useCallback(() => {
     generationRef.current += 1;
     const controller = controllerRef.current;
@@ -300,6 +329,7 @@ export function useUniverseSimulation(): UniverseSimulation {
     step,
     setTimeScale,
     replaceBodies,
+    restoreSnapshot,
     retry,
   };
 }

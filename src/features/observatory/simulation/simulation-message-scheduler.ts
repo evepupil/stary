@@ -57,7 +57,11 @@ export function createSimulationMessageScheduler(
         frameId ??= options.requestFrame(flush);
         return;
       }
-      if (message.type === 'bodiesReplaced' || message.type === 'collisionBatchResolved') {
+      if (
+        message.type === 'bodiesReplaced' ||
+        message.type === 'collisionBatchResolved' ||
+        message.type === 'snapshotRestored'
+      ) {
         if (buffer.stateMessage === null && frameId !== null) {
           options.cancelFrame(frameId);
           frameId = null;

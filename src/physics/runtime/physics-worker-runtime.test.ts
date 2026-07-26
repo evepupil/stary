@@ -1,7 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import { parseWorkerToMainMessage } from '../protocol/parse-message';
-import type { BodyState, MainToWorkerMessage, WorkerToMainMessage } from '../protocol/schemas';
+import type {
+  BodyState,
+  MainToWorkerMessage,
+  PhysicsState,
+  WorkerToMainMessage,
+} from '../protocol/schemas';
 import { MAX_TIME_SCALE, PHYSICS_PROTOCOL_VERSION } from '../protocol/schemas';
 import { createCircularSunEarthScenario } from '../scenarios/sun-earth';
 import type { PhysicsScheduler, ScheduledPhysicsTask } from './physics-scheduler';
@@ -110,6 +115,13 @@ function command(
         readonly expectedBodyRevision: number;
         readonly expectedSimulationTimeSeconds: number;
         readonly type: 'replaceBodies';
+      }
+    | {
+        readonly expectedBodyRevision: number;
+        readonly expectedSimulationTimeSeconds: number;
+        readonly snapshotSimulationTimeSeconds: number;
+        readonly state: PhysicsState;
+        readonly type: 'restoreSnapshot';
       },
 ): MainToWorkerMessage {
   return {
@@ -119,6 +131,48 @@ function command(
     simulationTimeSeconds: 0,
     ...payload,
   } as MainToWorkerMessage;
+}
+
+function restoreSnapshotState(bodies: readonly BodyState[]): PhysicsState {
+  const zeroVector = { x: 0, y: 0, z: 0 } as const;
+  return {
+    majorBodies: bodies.map((body) => structuredClone(body)),
+    tracers: [
+      {
+        id: 'restored-tracer',
+        massKg: 2,
+        positionMeters: { x: 4e11, y: 0, z: 0 },
+        velocityMetersPerSecond: zeroVector,
+        materialLayers: [{ material: 'silicate', massFraction: 1 }],
+        subgridMechanicalEnergyJoules: 0,
+      },
+    ],
+    dustCohorts: [],
+    cumulativeCollisionLedger: {
+      resolvedEventCount: 1,
+      accumulatedDissipation: {
+        heatJoules: 5,
+        deformationJoules: 0,
+        fractureJoules: 0,
+        radiationJoules: 0,
+      },
+    },
+    omittedInteractionClasses: ['passiveBackreaction'],
+    cumulativeOmittedBackreaction: {
+      linearImpulseKgMetersPerSecond: zeroVector,
+      angularImpulseKgMetersSquaredPerSecond: zeroVector,
+      workJoules: 0,
+    },
+    diagnostics: {
+      activeRebound: diagnostics,
+      passiveAssets: {
+        totalMassKg: 2,
+        totalLinearMomentumKgMetersPerSecond: zeroVector,
+        totalAngularMomentumKgMetersSquaredPerSecond: zeroVector,
+        totalMechanicalEnergyJoules: 0,
+      },
+    },
+  };
 }
 
 function replacementBodies(): readonly BodyState[] {
@@ -700,5 +754,127 @@ describe('PhysicsWorkerRuntime', () => {
       replyToSequence: 1,
     });
     expect(harness.messages).toHaveLength(messageCount);
+  });
+
+  it('恢复快照原子采纳完整状态、跳转时间并递增修订号', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'step', stepSeconds: 123.5 }));
+    const snapshotState = restoreSnapshotState(replacementBodies());
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 123.5,
+        snapshotSimulationTimeSeconds: 42,
+        state: snapshotState,
+      }),
+    );
+
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'snapshotRestored',
+      replyToSequence: 2,
+      simulationTimeSeconds: 42,
+      bodyRevision: 1,
+      state: {
+        tracers: [{ id: 'restored-tracer' }],
+        cumulativeCollisionLedger: { resolvedEventCount: 1 },
+      },
+    });
+    expect(harness.simulation.destroyCount).toBe(1);
+    expect(harness.simulations.at(1)?.timeSeconds).toBe(42);
+
+    await harness.runtime.receive(command(3, { type: 'step', stepSeconds: 1 }));
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'state',
+      replyToSequence: 3,
+      simulationTimeSeconds: 43,
+      bodyRevision: 1,
+      state: { cumulativeCollisionLedger: { resolvedEventCount: 1 } },
+    });
+  });
+
+  it('恢复快照的修订与时间冲突走可恢复错误且不动原实例', async () => {
+    const harness = createHarness();
+    await initialize(harness);
+    await harness.runtime.receive(command(1, { type: 'pause' }));
+    const snapshotState = restoreSnapshotState(replacementBodies());
+
+    await harness.runtime.receive(
+      command(2, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: 3,
+        expectedSimulationTimeSeconds: 0,
+        snapshotSimulationTimeSeconds: 42,
+        state: snapshotState,
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'bodyRevisionConflict',
+      recoverable: true,
+    });
+
+    await harness.runtime.receive(
+      command(3, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 7,
+        snapshotSimulationTimeSeconds: 42,
+        state: snapshotState,
+      }),
+    );
+    expect(harness.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'bodySnapshotConflict',
+      recoverable: true,
+    });
+    expect(harness.simulation.destroyCount).toBe(0);
+    expect(harness.simulations).toHaveLength(1);
+  });
+
+  it('运行中拒绝恢复快照,候选失败回滚保留原实例与修订号', async () => {
+    const running = createHarness();
+    await initialize(running);
+    await running.runtime.receive(command(1, { type: 'start' }));
+    await running.runtime.receive(
+      command(2, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        snapshotSimulationTimeSeconds: 42,
+        state: restoreSnapshotState(replacementBodies()),
+      }),
+    );
+    expect(running.messages.at(-1)).toMatchObject({ type: 'error', code: 'invalidState' });
+
+    const failing = createHarness('time');
+    await initialize(failing);
+    await failing.runtime.receive(command(1, { type: 'pause' }));
+    await failing.runtime.receive(
+      command(2, {
+        type: 'restoreSnapshot',
+        expectedBodyRevision: 0,
+        expectedSimulationTimeSeconds: 0,
+        snapshotSimulationTimeSeconds: 42,
+        state: restoreSnapshotState(replacementBodies()),
+      }),
+    );
+
+    expect(failing.messages.at(-1)).toMatchObject({
+      type: 'error',
+      code: 'snapshotRestoreFailed',
+      recoverable: true,
+    });
+    expect(failing.simulation.destroyCount).toBe(0);
+    expect(failing.simulations.at(1)?.destroyCount).toBe(1);
+
+    await failing.runtime.receive(command(3, { type: 'step', stepSeconds: 1 }));
+    expect(failing.messages.at(-1)).toMatchObject({
+      type: 'state',
+      bodyRevision: 0,
+      simulationTimeSeconds: 1,
+    });
   });
 });

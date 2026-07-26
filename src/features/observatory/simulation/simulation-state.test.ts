@@ -13,6 +13,7 @@ import {
   createTestDiagnostics,
   createTestPhysicsState,
   createTestReplacementMessage,
+  createTestSnapshotRestoredMessage,
   createTestStateMessage,
 } from './test-helpers';
 
@@ -284,6 +285,60 @@ describe('applyWorkerMessage', () => {
       bodyRevision: 0,
     });
     expect(restarted.latestCollisionBatch).toBeNull();
+  });
+
+  it('快照恢复原子替换完整状态、跳转时间并清除碰撞批次记录', () => {
+    const collision = createTestCollisionBatchMessage({ sequence: 3, bodyRevisionBefore: 0 });
+    const resolved = applyWorkerMessage(
+      {
+        ...createInitialSimulationState(bodies, 1),
+        phase: 'ready',
+        runState: 'running',
+        physicsState: createTestPhysicsState(bodies),
+        latestAppliedSequence: 2,
+        latestStateSequence: 2,
+      },
+      collision,
+    );
+    expect(resolved.latestCollisionBatch).not.toBeNull();
+
+    const restoredBodies = [createTestBody({ id: 'restored-earth', massKg: 2 })];
+    const restored = applyWorkerMessage(
+      resolved,
+      createTestSnapshotRestoredMessage({
+        sequence: 5,
+        replyToSequence: 9,
+        bodyRevision: collision.bodyRevisionAfter + 1,
+        simulationTimeSeconds: 12,
+        bodies: restoredBodies,
+        resolvedEventCount: 1,
+      }),
+    );
+
+    expect(restored).toMatchObject({
+      phase: 'ready',
+      runState: 'paused',
+      bodies: restoredBodies,
+      latestCollisionBatch: null,
+      bodyRevision: collision.bodyRevisionAfter + 1,
+      bodySnapshotSimulationTimeSeconds: 12,
+      simulationTimeSeconds: 12,
+      latestAppliedSequence: 5,
+      error: null,
+    });
+    expect(restored.baselineDiagnostics).toBe(restored.diagnostics);
+
+    const stale = applyWorkerMessage(
+      restored,
+      createTestSnapshotRestoredMessage({
+        sequence: 4,
+        replyToSequence: 8,
+        bodyRevision: collision.bodyRevisionAfter,
+        simulationTimeSeconds: 30,
+        bodies: restoredBodies,
+      }),
+    );
+    expect(stale).toBe(restored);
   });
 
   it('可恢复错误保持 phase，不可恢复错误进入 error phase', () => {
