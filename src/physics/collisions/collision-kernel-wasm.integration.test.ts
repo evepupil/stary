@@ -405,4 +405,81 @@ describe('Collision WASM real kernel parity', () => {
       '$.events[0].ledger.relativeKineticEnergy.radiationJoules',
     ]);
   });
+
+  it('atomically rejects a batch whose second event exceeds remaining capacity', () => {
+    const mergeBodies = contactBodies({
+      targetMassKg: 4e21,
+      projectileMassKg: 2e21,
+      targetRadiusMeters: 700_000,
+      projectileRadiusMeters: 500_000,
+      impactSpeedMetersPerSecond: 1,
+    });
+    const input = request(
+      [
+        classicEvent('atomic-a-event', renamedBodies('atomic-a', mergeBodies)),
+        classicEvent('atomic-b-event', renamedBodies('atomic-b', mergeBodies)),
+      ],
+      { majorRemnantSlots: 1, passiveAssetSlots: 0 },
+    );
+
+    const parity = expectRealKernelParity(kernel, input);
+    expect(parity.numericDriftPaths).toEqual([]);
+    expect(parity.actual).toMatchObject({
+      kind: 'error',
+      error: { code: 'collisionCapacityExceeded', eventId: 'atomic-b-event' },
+    });
+  });
+
+  it('rejects stellar participants and sub-kilometer strength regimes as whole-batch errors', () => {
+    const stellarBodies = renamedBodies(
+      'stellar',
+      contactBodies({
+        targetMassKg: 4e21,
+        projectileMassKg: 2e21,
+        targetRadiusMeters: 700_000,
+        projectileRadiusMeters: 500_000,
+        impactSpeedMetersPerSecond: 1,
+      }),
+    );
+    const stellarParity = expectRealKernelParity(
+      kernel,
+      request(
+        [
+          classicEvent('event-stellar', [
+            { ...stellarBodies[0], collisionModel: 'stellar' },
+            stellarBodies[1],
+          ]),
+        ],
+        { majorRemnantSlots: 2, passiveAssetSlots: 1 },
+      ),
+    );
+    expect(stellarParity.numericDriftPaths).toEqual([]);
+    expect(stellarParity.actual).toMatchObject({
+      kind: 'error',
+      error: { code: 'unsupportedStellarCollision', eventId: 'event-stellar' },
+    });
+
+    const strengthBodies = renamedBodies(
+      'strength',
+      contactBodies({
+        targetMassKg: 4e9,
+        projectileMassKg: 2e9,
+        targetRadiusMeters: 900,
+        projectileRadiusMeters: 500,
+        impactSpeedMetersPerSecond: 1,
+      }),
+    );
+    const strengthParity = expectRealKernelParity(
+      kernel,
+      request([classicEvent('event-strength', strengthBodies)], {
+        majorRemnantSlots: 2,
+        passiveAssetSlots: 1,
+      }),
+    );
+    expect(strengthParity.numericDriftPaths).toEqual([]);
+    expect(strengthParity.actual).toMatchObject({
+      kind: 'error',
+      error: { code: 'unsupportedStrengthRegime', eventId: 'event-strength' },
+    });
+  });
 });
